@@ -17,6 +17,36 @@ const VERSION_KEYWORDS = [
   "version",
   "release",
 ];
+
+// Date-like patterns that the version regex might match (e.g., "January 17, 2023" → "17.01")
+const DATE_CONTEXT_REGEX = /(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+\d|,\s*\d{4}|\d{4}[-/]\d{2}/i;
+
+// OS names that precede version-like numbers (e.g., "Windows 8.1", "macOS 14.2")
+const OS_PREFIX_REGEX = /(?:windows|macos|mac\s*os\s*x?|os\s*x|android|ios|ubuntu|debian|fedora|rhel|centos)\s+$/i;
+
+// Size units that follow version-like numbers (e.g., "8.1 MB")
+const SIZE_SUFFIX_REGEX = /^\s*(?:b|kb|mb|gb|tb|bytes|kib|mib|gib)\b/i;
+
+function shouldSkipVersion(version: string, fullMatch: string, fullText: string, matchIndex: number): boolean {
+  const matchEnd = matchIndex + fullMatch.length;
+
+  // Check if followed by a size unit (e.g., "8.1 MB")
+  const textAfter = fullText.slice(matchEnd, matchEnd + 10);
+  if (SIZE_SUFFIX_REGEX.test(textAfter)) return true;
+
+  // Check date context
+  const major = parseInt(version.split(".")[0]);
+  if (major < 100 && DATE_CONTEXT_REGEX.test(fullText)) return true;
+
+  // Check if preceded by an OS name (e.g., "Windows 8.1")
+  const textBefore = fullText.slice(Math.max(0, matchIndex - 30), matchIndex);
+  if (OS_PREFIX_REGEX.test(textBefore)) return true;
+
+  return false;
+}
+
+// Keywords that strongly indicate the actual latest version
+const LATEST_KEYWORDS = ["latest", "newest", "current", "stable"];
 const DOWNLOAD_EXTENSIONS =
   /\.(dmg|exe|msi|pkg|zip|tar\.gz|tar\.xz|tar\.bz2|appimage|deb|rpm|snap|flatpak|7z|rar)$/i;
 
@@ -54,15 +84,18 @@ function extractVersions($: cheerio.CheerioAPI, selector?: string | null, patter
   // Heuristic: find version strings near keywords
   // Check the element itself, parent, and grandparent for keyword proximity,
   // since version text is often in a sibling/child of the keyword element.
-  function hasNearbyKeyword($el: cheerio.Cheerio<any>): boolean {
+  // Returns a score: 0 = no keywords, 20 = general keyword, 40 = "latest"/"current"
+  function keywordScore($el: cheerio.Cheerio<any>): number {
+    let best = 0;
     for (let i = 0; i < 3; i++) {
       const text = ($el.text() || "").toLowerCase();
-      if (VERSION_KEYWORDS.some((kw) => text.includes(kw))) return true;
+      if (LATEST_KEYWORDS.some((kw) => text.includes(kw))) return 40;
+      if (VERSION_KEYWORDS.some((kw) => text.includes(kw))) best = 20;
       const $parent = $el.parent();
       if ($parent.length === 0) break;
       $el = $parent;
     }
-    return false;
+    return best;
   }
 
   $("h1, h2, h3, h4, h5, h6, p, span, div, a, li, td, th, strong, em, b, label").each((_, el) => {
@@ -79,17 +112,19 @@ function extractVersions($: cheerio.CheerioAPI, selector?: string | null, patter
     const regex = new RegExp(VERSION_REGEX.source, "g");
     let match;
     while ((match = regex.exec(fullText)) !== null) {
+      if (shouldSkipVersion(match[1], match[0], fullText, match.index)) continue;
+
       const tagName = (el as any).tagName?.toLowerCase() || "";
       const depthScore = tagName.startsWith("h") ? (7 - parseInt(tagName[1])) * 5 : 0;
 
       let score = depthScore;
-      if (hasNearbyKeyword($el)) score += 20;
+      score += keywordScore($el);
 
       candidates.push({ version: match[1], score });
     }
   });
 
-  // Deduplicate, then among keyword-adjacent candidates pick the highest version
+  // Deduplicate (keep first occurrence — page order matters)
   const seen = new Set<string>();
   const unique = candidates.filter((c) => {
     if (seen.has(c.version)) return false;
@@ -97,18 +132,11 @@ function extractVersions($: cheerio.CheerioAPI, selector?: string | null, patter
     return true;
   });
 
-  // Partition: candidates near keywords vs not
-  const nearKeyword = unique.filter((c) => c.score > 0);
-  const rest = unique.filter((c) => c.score === 0);
+  // Sort by score descending (keyword proximity + heading depth).
+  // Within the same score, preserve page order (first = likely latest).
+  unique.sort((a, b) => b.score - a.score);
 
-  // Sort each group by version descending (highest version first)
-  const sortByVersion = (a: VersionCandidate, b: VersionCandidate) =>
-    compareVersions(a.version, b.version);
-
-  nearKeyword.sort(sortByVersion);
-  rest.sort(sortByVersion);
-
-  return [...nearKeyword, ...rest];
+  return unique;
 }
 
 function extractDownloadLinks($: cheerio.CheerioAPI, baseUrl: string, selector?: string | null, pattern?: string | null): string[] {
@@ -143,6 +171,27 @@ function extractDownloadLinks($: cheerio.CheerioAPI, baseUrl: string, selector?:
       }
     } catch { /* skip */ }
   });
+
+  // Also look for download-intent links (text or href suggests a download,
+  // even without a file extension). These are entry points for pages like
+  // SourceForge where the actual download is behind a countdown/redirect.
+  if (links.length === 0) {
+    $("a[href]").each((_, el) => {
+      const $a = $(el);
+      const href = $a.attr("href") || "";
+      const text = ($a.text() || "").toLowerCase().trim();
+
+      // Match links whose text says "download" or whose href path contains "download"
+      const textIsDownload = DOWNLOAD_BUTTON_TEXTS.some((t) => text.includes(t));
+      const hrefIsDownload = /\/download(\/|$|\?)/i.test(href);
+
+      if (textIsDownload || hrefIsDownload) {
+        try {
+          links.push(new URL(href, baseUrl).href);
+        } catch { /* skip */ }
+      }
+    });
+  }
 
   if (pattern) {
     const regex = new RegExp(pattern, "i");

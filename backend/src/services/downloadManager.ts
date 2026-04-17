@@ -7,6 +7,10 @@ import { appConfig } from "../config.js";
 import { getLatestResult, checkAppForUpdates } from "./versionChecker.js";
 import { resolveGenericDownloadUrl } from "./providers/generic.js";
 
+// Common downloadable file extensions (for detecting real filenames)
+const DOWNLOAD_EXTENSIONS_SIMPLE =
+  /\.(zip|tar\.gz|tar\.xz|tar\.bz2|gz|xz|bz2|7z|rar|exe|msi|dmg|pkg|deb|rpm|appimage|snap|flatpak|bin|iso|img)$/i;
+
 // Track active download abort controllers
 const activeDownloads = new Map<number, AbortController>();
 
@@ -79,7 +83,7 @@ export async function queueDownload(app: Application): Promise<Download> {
 }
 
 async function startDownload(downloadId: number) {
-  const download = db
+  let download = db
     .select()
     .from(downloads)
     .where(eq(downloads.id, downloadId))
@@ -114,7 +118,7 @@ async function startDownload(downloadId: number) {
       }
     }
 
-    const partPath = download.filePath + ".part";
+    let partPath = download.filePath + ".part";
     let downloadedBytes = download.downloadedBytes ?? 0;
 
     // Check if partial file exists and matches DB state
@@ -145,6 +149,44 @@ async function startDownload(downloadId: number) {
     // If server doesn't support Range, restart
     if (downloadedBytes > 0 && response.status !== 206) {
       downloadedBytes = 0;
+    }
+
+    // Detect real filename from (in priority order):
+    // 1. Content-Disposition header
+    // 2. Final URL path after redirects (response.url)
+    // 3. Resolved download URL path
+    let realName: string | null = null;
+
+    const contentDisposition = response.headers.get("content-disposition") || "";
+    const cdMatch = contentDisposition.match(/filename\*?=(?:UTF-8''|"?)([^";]+)"?/i);
+    if (cdMatch) {
+      realName = decodeURIComponent(cdMatch[1].trim());
+    }
+
+    if (!realName || !DOWNLOAD_EXTENSIONS_SIMPLE.test(realName)) {
+      // Check the final URL after redirects (e.g., CDN URL with real filename)
+      try {
+        const finalPath = decodeURIComponent(path.basename(new URL(response.url).pathname));
+        if (DOWNLOAD_EXTENSIONS_SIMPLE.test(finalPath)) {
+          realName = finalPath;
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (realName && realName !== download.fileName) {
+      const dir = path.dirname(download.filePath!);
+      const newFilePath = path.join(dir, realName);
+      const oldPart = download.filePath + ".part";
+      const newPart = newFilePath + ".part";
+      if (fs.existsSync(oldPart) && oldPart !== newPart) {
+        fs.renameSync(oldPart, newPart);
+      }
+      partPath = newPart;
+      db.update(downloads)
+        .set({ fileName: realName, filePath: newFilePath })
+        .where(eq(downloads.id, downloadId))
+        .run();
+      download = db.select().from(downloads).where(eq(downloads.id, downloadId)).get()!;
     }
 
     const contentLength = response.headers.get("content-length");

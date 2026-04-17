@@ -15,7 +15,12 @@ import { startScheduler, stopScheduler } from "./services/scheduler.js";
 import { recoverInterruptedDownloads } from "./services/downloadManager.js";
 import { closeBrowser } from "./services/browserManager.js";
 
-const fastify = Fastify({ logger: true });
+const isDev = process.env.NODE_ENV !== "production";
+const fastify = Fastify({
+  logger: isDev
+    ? { transport: { target: "pino-pretty", options: { translateTime: "HH:MM:ss", ignore: "pid,hostname" } } }
+    : true,
+});
 
 async function start() {
   // Ensure data directories exist
