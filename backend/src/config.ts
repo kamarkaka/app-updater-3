@@ -13,7 +13,7 @@ export const appConfig = {
   dbPath: process.env.DB_PATH || path.join(dataDir, "app-updater.db"),
   secretKey: process.env.SECRET_KEY || "change-me-in-production",
   githubToken: process.env.GITHUB_TOKEN || "",
-  checkIntervalMinutes: parseInt(process.env.CHECK_INTERVAL || "360", 10),
+  checkIntervalMinutes: parseInt(process.env.CHECK_INTERVAL || "720", 10),
   maxConcurrentDownloads: parseInt(process.env.MAX_CONCURRENT_DL || "2", 10),
   sessionMaxAgeDays: 7,
 };

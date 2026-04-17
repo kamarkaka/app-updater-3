@@ -26,7 +26,7 @@ export const applications = sqliteTable("application", {
   currentVersion: text("current_version"),
   latestVersion: text("latest_version"),
   lastCheckedAt: integer("last_checked_at", { mode: "timestamp" }),
-  checkIntervalMinutes: integer("check_interval_minutes").default(360),
+  checkIntervalMinutes: integer("check_interval_minutes").default(720),
   status: text("status").notNull().default("active"),
   errorMessage: text("error_message"),
 
