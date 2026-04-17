@@ -424,6 +424,12 @@ export const genericProvider: VersionProvider = {
         app.downloadPattern
       );
 
+      // Filter to links matching the detected version (URL contains version string)
+      if (downloadUrls.length > 0) {
+        const versionInUrl = downloadUrls.filter((u) => u.includes(version));
+        if (versionInUrl.length > 0) downloadUrls = versionInUrl;
+      }
+
       // Filter by asset pattern
       if (app.assetPattern && downloadUrls.length > 0) {
         const regex = new RegExp(app.assetPattern, "i");
