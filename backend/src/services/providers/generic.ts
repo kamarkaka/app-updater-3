@@ -68,7 +68,7 @@ interface VersionCandidate {
   score: number;
 }
 
-function extractVersions($: cheerio.CheerioAPI, selector?: string | null, pattern?: string | null): VersionCandidate[] {
+function extractVersions($: cheerio.CheerioAPI, selector?: string | null, pattern?: string | null, nameFilter?: string | null): VersionCandidate[] {
   const candidates: VersionCandidate[] = [];
 
   // If user provided a selector + pattern, use those
@@ -102,9 +102,11 @@ function extractVersions($: cheerio.CheerioAPI, selector?: string | null, patter
     return best;
   }
 
+  const nameFilterLower = nameFilter?.toLowerCase() ?? null;
+  const versionRegex = new RegExp(VERSION_REGEX.source, "g");
+
   $("h1, h2, h3, h4, h5, h6, p, span, div, a, li, td, th, strong, em, b, label").each((_, el) => {
     const $el = $(el);
-    // Only process leaf-level text (elements with direct text content)
     const directText = $el
       .contents()
       .filter((_, node) => node.type === "text")
@@ -113,9 +115,11 @@ function extractVersions($: cheerio.CheerioAPI, selector?: string | null, patter
     if (!directText) return;
 
     const fullText = $el.text();
-    const regex = new RegExp(VERSION_REGEX.source, "g");
+    if (nameFilterLower && !fullText.toLowerCase().includes(nameFilterLower)) return;
+
+    versionRegex.lastIndex = 0;
     let match;
-    while ((match = regex.exec(fullText)) !== null) {
+    while ((match = versionRegex.exec(fullText)) !== null) {
       if (shouldSkipVersion(match[1], match[0], fullText, match.index)) continue;
 
       const tagName = (el as any).tagName?.toLowerCase() || "";
@@ -402,7 +406,8 @@ export const genericProvider: VersionProvider = {
       const versionCandidates = extractVersions(
         $,
         app.versionSelector,
-        app.versionPattern
+        app.versionPattern,
+        app.nameFilter
       );
 
       if (versionCandidates.length === 0) {

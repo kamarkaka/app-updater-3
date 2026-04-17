@@ -21,6 +21,7 @@ export default function AppForm() {
   const [sourceType, setSourceType] = useState("auto");
   const [checkInterval, setCheckInterval] = useState(0);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [nameFilter, setNameFilter] = useState("");
   const [versionSelector, setVersionSelector] = useState("");
   const [versionPattern, setVersionPattern] = useState("");
   const [downloadSelector, setDownloadSelector] = useState("");
@@ -40,12 +41,14 @@ export default function AppForm() {
         setUrl(app.url);
         setSourceType(app.sourceType);
         setCheckInterval(app.checkIntervalMinutes!);
+        setNameFilter(app.nameFilter ?? "");
         setVersionSelector(app.versionSelector ?? "");
         setVersionPattern(app.versionPattern ?? "");
         setDownloadSelector(app.downloadSelector ?? "");
         setDownloadPattern(app.downloadPattern ?? "");
         setAssetPattern(app.assetPattern ?? "");
         if (
+          app.nameFilter ||
           app.versionSelector ||
           app.versionPattern ||
           app.downloadSelector ||
@@ -68,6 +71,7 @@ export default function AppForm() {
       url,
       sourceType,
       checkIntervalMinutes: checkInterval,
+      ...(nameFilter && { nameFilter }),
       ...(versionSelector && { versionSelector }),
       ...(versionPattern && { versionPattern }),
       ...(downloadSelector && { downloadSelector }),
@@ -155,6 +159,22 @@ export default function AppForm() {
             />
           </label>
         </div>
+
+        <label className="block">
+          <span className="text-sm text-gray-400">
+            Name Filter
+          </span>
+          <input
+            type="text"
+            value={nameFilter}
+            onChange={(e) => setNameFilter(e.target.value)}
+            placeholder='e.g., "Python 3" to match only Python 3.x versions'
+            className="mt-1 block w-full rounded bg-gray-800 border border-gray-700 px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+          />
+          <span className="text-xs text-gray-500 mt-1">
+            Only detect versions near text containing this string
+          </span>
+        </label>
 
         <button
           type="button"

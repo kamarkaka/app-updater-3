@@ -30,6 +30,7 @@ export const applications = sqliteTable("application", {
   status: text("status").notNull().default("active"),
   errorMessage: text("error_message"),
 
+  nameFilter: text("name_filter"),
   versionSelector: text("version_selector"),
   versionPattern: text("version_pattern"),
   downloadSelector: text("download_selector"),

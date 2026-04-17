@@ -9,6 +9,7 @@ export interface Application {
   checkIntervalMinutes: number | null;
   status: string;
   errorMessage: string | null;
+  nameFilter: string | null;
   versionSelector: string | null;
   versionPattern: string | null;
   downloadSelector: string | null;

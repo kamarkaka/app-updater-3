@@ -8,6 +8,13 @@
       "when": 1776438280005,
       "tag": "0000_windy_hellfire_club",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1776457029670,
+      "tag": "0001_colorful_magik",
+      "breakpoints": true
     }
   ]
 }

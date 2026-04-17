@@ -13,6 +13,7 @@ const createAppSchema = z.object({
   url: z.string().url(),
   sourceType: z.enum(["auto", "github", "gitlab", "generic"]).default("auto"),
   checkIntervalMinutes: z.number().int().min(1).optional(),
+  nameFilter: z.string().optional(),
   versionSelector: z.string().optional(),
   versionPattern: z.string().optional(),
   downloadSelector: z.string().optional(),
