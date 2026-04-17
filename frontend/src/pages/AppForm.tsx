@@ -19,7 +19,7 @@ export default function AppForm() {
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [sourceType, setSourceType] = useState("auto");
-  const [checkInterval, setCheckInterval] = useState(720);
+  const [checkInterval, setCheckInterval] = useState(0);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [versionSelector, setVersionSelector] = useState("");
   const [versionPattern, setVersionPattern] = useState("");
@@ -30,12 +30,16 @@ export default function AppForm() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    api.getSettings().then((s) => setCheckInterval(s.checkIntervalMinutes));
+  }, []);
+
+  useEffect(() => {
     if (isEdit) {
       api.getApp(parseInt(id)).then((app) => {
         setName(app.name);
         setUrl(app.url);
         setSourceType(app.sourceType);
-        setCheckInterval(app.checkIntervalMinutes ?? 720);
+        setCheckInterval(app.checkIntervalMinutes!);
         setVersionSelector(app.versionSelector ?? "");
         setVersionPattern(app.versionPattern ?? "");
         setDownloadSelector(app.downloadSelector ?? "");

@@ -111,7 +111,7 @@ export default function AppDetail() {
         <div className="rounded border border-gray-800 bg-gray-900 p-4">
           <span className="text-xs text-gray-500">Check Interval</span>
           <p className="text-white font-medium mt-1">
-            {app.checkIntervalMinutes ?? 720} min
+            {app.checkIntervalMinutes} min
           </p>
         </div>
       </div>

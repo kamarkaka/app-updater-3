@@ -3,6 +3,7 @@ import { z } from "zod";
 import { eq, desc, asc } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { applications, downloads } from "../db/schema.js";
+import { appConfig } from "../config.js";
 import { classifySource } from "../services/providers/classifier.js";
 import { checkAppForUpdates, clearLatestResult } from "../services/versionChecker.js";
 import { queueDownload } from "../services/downloadManager.js";
@@ -61,7 +62,11 @@ export default async function appRoutes(fastify: FastifyInstance) {
 
     const app = db
       .insert(applications)
-      .values({ ...body, sourceType })
+      .values({
+        ...body,
+        sourceType,
+        checkIntervalMinutes: body.checkIntervalMinutes ?? appConfig.checkIntervalMinutes,
+      })
       .returning()
       .get();
 
