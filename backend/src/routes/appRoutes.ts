@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, asc } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { applications, downloads } from "../db/schema.js";
 import { classifySource } from "../services/providers/classifier.js";
@@ -31,7 +31,7 @@ export default async function appRoutes(fastify: FastifyInstance) {
     const apps = db
       .select()
       .from(applications)
-      .orderBy(desc(applications.updatedAt))
+      .orderBy(asc(applications.name))
       .all();
     return apps;
   });

@@ -14,7 +14,7 @@ export default function StatusBadge({ status }: { status: string }) {
   const style = statusStyles[status] || statusStyles.active;
   return (
     <span
-      className={`inline-block px-2 py-0.5 rounded text-xs font-medium border ${style}`}
+      className={`inline-block px-2 py-0.5 rounded text-xs font-medium border whitespace-nowrap ${style}`}
     >
       {status}
     </span>
