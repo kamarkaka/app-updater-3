@@ -1,0 +1,13 @@
+services:
+  app-updater:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      # - GITHUB_TOKEN=ghp_...
+      # - DOWNLOAD_DIR=/downloads  # override if using separate volume
+      # - CHECK_INTERVAL=360
+    restart: unless-stopped
