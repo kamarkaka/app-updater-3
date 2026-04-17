@@ -8,7 +8,8 @@ import { getBrowser, incrementPageCount } from "../browserManager.js";
 import { VersionProvider, VersionResult } from "./types.js";
 import { compareVersions } from "../versionCompare.js";
 
-const VERSION_REGEX = /\bv?(\d+\.\d+(?:\.\d+){0,2}(?:[-+][\w.]+)?)\b/g;
+// Matches dotted versions (1.2, 1.2.3, 1.2.3.4) and "Build XXXX" patterns
+const VERSION_REGEX = /\bv?(\d+\.\d+(?:\.\d+){0,2}(?:[-+][\w.]+)?)\b|\bbuild\s+(\d+)\b/gi;
 const VERSION_KEYWORDS = [
   "latest",
   "current",
@@ -21,8 +22,8 @@ const VERSION_KEYWORDS = [
 // Date-like patterns that the version regex might match (e.g., "January 17, 2023" → "17.01")
 const DATE_CONTEXT_REGEX = /(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+\d|,\s*\d{4}|\d{4}[-/]\d{2}/i;
 
-// Product/OS names that precede version-like numbers — these are not the software's own version
-const PRODUCT_PREFIX_REGEX = /(?:windows|macos|mac\s*os\s*x?|os\s*x|android|ios|ubuntu|debian|fedora|rhel|centos|geforce|radeon|intel|nvidia|amd|driver|drivers|directx|opengl|vulkan|cuda|bios|firmware|kernel)\s+$/i;
+// Product/OS/library names that precede version-like numbers — not the software's own version
+const PRODUCT_PREFIX_REGEX = /(?:windows|macos|mac\s*os\s*x?|os\s*x|android|ios|ubuntu|debian|fedora|rhel|centos|geforce|radeon|intel|nvidia|amd|driver|drivers|directx|opengl|openssl|vulkan|cuda|bios|firmware|kernel|python|ruby|java|php|perl|node|gcc|clang|llvm|cmake|qt|gtk|glibc|libssl|zlib|sqlite|postgresql|mysql|redis)\s+(?:to\s+)?$/i;
 
 // Size units that follow version-like numbers (e.g., "8.1 MB")
 const SIZE_SUFFIX_REGEX = /^\s*(?:b|kb|mb|gb|tb|bytes|kib|mib|gib)\b/i;
@@ -32,14 +33,24 @@ function shouldSkipVersion(version: string, fullMatch: string, fullText: string,
   const textBefore = fullText.slice(Math.max(0, matchIndex - 30), matchIndex);
   const textAfter = fullText.slice(matchEnd, matchEnd + 10);
 
+  // Skip "0.0" — not a real software version
+  if (/^0\.0(\.0)*$/.test(version)) return true;
+
   // Check if followed by a size unit (e.g., "8.1 MB")
   if (SIZE_SUFFIX_REGEX.test(textAfter)) return true;
 
-  // Check if preceded by a product/OS/driver name (e.g., "Windows 8.1", "GeForce 576.02")
+  // Check if part of a range (e.g., "0.0 to 1.0", "from 1.0", "1.0 - 2.0")
+  if (/^\s*(?:to|through|-)\s+\d/i.test(textAfter)) return true;
+  if (/(?:from|between)\s+$/i.test(textBefore)) return true;
+  if (/\d\s+(?:to|through|-)\s+$/i.test(textBefore)) return true;
+
+  // Check if preceded by a product/OS/driver/library name
   if (PRODUCT_PREFIX_REGEX.test(textBefore)) return true;
 
+  // Check if in a comma-separated list of OS versions (e.g., "Windows XP, Vista, 7, 8, 8.1, 10")
+  if (/,\s*$/.test(textBefore) && /windows|macos|android|ios|ubuntu/i.test(fullText)) return true;
+
   // Check if the version is immediately adjacent to date context
-  // (e.g., "January 17.01" or "12.05, 2023") — only check nearby text, not the whole element
   const major = parseInt(version.split(".")[0]);
   if (major < 100) {
     const nearby = textBefore.slice(-20) + fullMatch + textAfter;
@@ -103,7 +114,7 @@ function extractVersions($: cheerio.CheerioAPI, selector?: string | null, patter
   }
 
   const nameFilterLower = nameFilter?.toLowerCase() ?? null;
-  const versionRegex = new RegExp(VERSION_REGEX.source, "g");
+  const versionRegex = new RegExp(VERSION_REGEX.source, "gi");
 
   $("h1, h2, h3, h4, h5, h6, p, span, div, a, li, td, th, strong, em, b, label").each((_, el) => {
     const $el = $(el);
@@ -120,7 +131,9 @@ function extractVersions($: cheerio.CheerioAPI, selector?: string | null, patter
     versionRegex.lastIndex = 0;
     let match;
     while ((match = versionRegex.exec(fullText)) !== null) {
-      if (shouldSkipVersion(match[1], match[0], fullText, match.index)) continue;
+      const version = match[1] || match[2];
+      if (!version) continue;
+      if (shouldSkipVersion(version, match[0], fullText, match.index)) continue;
 
       const tagName = (el as any).tagName?.toLowerCase() || "";
       const depthScore = tagName.startsWith("h") ? (7 - parseInt(tagName[1])) * 5 : 0;
@@ -128,17 +141,19 @@ function extractVersions($: cheerio.CheerioAPI, selector?: string | null, patter
       let score = depthScore;
       score += keywordScore($el);
 
-      candidates.push({ version: match[1], score });
+      candidates.push({ version, score });
     }
   });
 
-  // Deduplicate (keep first occurrence — page order matters)
-  const seen = new Set<string>();
-  const unique = candidates.filter((c) => {
-    if (seen.has(c.version)) return false;
-    seen.add(c.version);
-    return true;
-  });
+  // Deduplicate — keep the highest-scoring occurrence of each version
+  const bestByVersion = new Map<string, VersionCandidate>();
+  for (const c of candidates) {
+    const existing = bestByVersion.get(c.version);
+    if (!existing || c.score > existing.score) {
+      bestByVersion.set(c.version, c);
+    }
+  }
+  const unique = [...bestByVersion.values()];
 
   // Sort by score descending (keyword proximity + heading depth).
   // Within the same score, preserve page order (first = likely latest).
@@ -201,7 +216,7 @@ function extractDownloadLinks($: cheerio.CheerioAPI, baseUrl: string, selector?:
 
         if (FILE_TYPE_HINTS.test(text)) {
           fileTypeLinks.push(fullUrl);
-        } else if (/\/download(\/|$|\?)/i.test(href)) {
+        } else if (/\/download(?:_\w+)?(?:\/|$|\?)/i.test(href)) {
           downloadTextLinks.push(fullUrl);
         } else if (/^download( |$)/i.test(text) || /^download (now|latest)/i.test(text)) {
           // Strict match: text starts with "download", not just contains it
@@ -280,6 +295,8 @@ async function resolveDownloadUrl(
 
       // Poll for up to 5 seconds — handles pages where JS injects buttons after a delay
       for (let attempt = 0; attempt < 5; attempt++) {
+        // If CDP already intercepted an auto-download, no need to scan the DOM
+        if (resolvedUrl) return null;
         if (attempt > 0) await new Promise((r) => setTimeout(r, 1000));
 
         const result = await page.evaluate(() => {
@@ -401,6 +418,7 @@ export const genericProvider: VersionProvider = {
       await page.goto(app.url, { waitUntil: "networkidle2", timeout: 30000 });
       const html = await page.content();
       const $ = cheerio.load(html);
+      $("script, style, noscript").remove();
 
       // Step 1: Extract version
       const versionCandidates = extractVersions(
