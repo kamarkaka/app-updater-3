@@ -6,6 +6,7 @@ import type { Page, HTTPResponse, CDPSession } from "puppeteer";
 import { Application } from "../../db/schema.js";
 import { getBrowser, incrementPageCount } from "../browserManager.js";
 import { VersionProvider, VersionResult } from "./types.js";
+import { compareVersions } from "../versionCompare.js";
 
 const VERSION_REGEX = /\bv?(\d+\.\d+(?:\.\d+)?(?:[-+][\w.]+)?)\b/g;
 const VERSION_KEYWORDS = [
@@ -33,7 +34,7 @@ interface VersionCandidate {
   score: number;
 }
 
-function extractVersions(html: string, $: cheerio.CheerioAPI, selector?: string | null, pattern?: string | null): VersionCandidate[] {
+function extractVersions($: cheerio.CheerioAPI, selector?: string | null, pattern?: string | null): VersionCandidate[] {
   const candidates: VersionCandidate[] = [];
 
   // If user provided a selector + pattern, use those
@@ -83,15 +84,26 @@ function extractVersions(html: string, $: cheerio.CheerioAPI, selector?: string 
     }
   }
 
-  // Deduplicate and sort by score
+  // Deduplicate, then among keyword-adjacent candidates pick the highest version
   const seen = new Set<string>();
-  return candidates
-    .filter((c) => {
-      if (seen.has(c.version)) return false;
-      seen.add(c.version);
-      return true;
-    })
-    .sort((a, b) => b.score - a.score);
+  const unique = candidates.filter((c) => {
+    if (seen.has(c.version)) return false;
+    seen.add(c.version);
+    return true;
+  });
+
+  // Partition: candidates near keywords vs not
+  const nearKeyword = unique.filter((c) => c.score > 0);
+  const rest = unique.filter((c) => c.score === 0);
+
+  // Sort each group by version descending (highest version first)
+  const sortByVersion = (a: VersionCandidate, b: VersionCandidate) =>
+    compareVersions(a.version, b.version);
+
+  nearKeyword.sort(sortByVersion);
+  rest.sort(sortByVersion);
+
+  return [...nearKeyword, ...rest];
 }
 
 function extractDownloadLinks($: cheerio.CheerioAPI, baseUrl: string, selector?: string | null, pattern?: string | null): string[] {
@@ -281,7 +293,6 @@ export const genericProvider: VersionProvider = {
 
       // Step 1: Extract version
       const versionCandidates = extractVersions(
-        html,
         $,
         app.versionSelector,
         app.versionPattern

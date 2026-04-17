@@ -57,7 +57,7 @@ export const githubProvider: VersionProvider = {
       data = await releaseRes.json();
       assets = (data.assets || []).map((a: any) => a.browser_download_url);
 
-      const version = (data.tag_name || "").replace(/^v/, "");
+      const version = data.tag_name || "";
       return {
         version,
         downloadUrls: filterAssets(assets, app.assetPattern),
@@ -81,7 +81,7 @@ export const githubProvider: VersionProvider = {
       throw new Error("No releases or tags found");
     }
 
-    const version = (tags[0].name || "").replace(/^v/, "");
+    const version = tags[0].name || "";
     // For tags, provide tarball/zipball as download URLs
     const tarball = `https://github.com/${repo.owner}/${repo.repo}/archive/refs/tags/${tags[0].name}.tar.gz`;
     const zipball = `https://github.com/${repo.owner}/${repo.repo}/archive/refs/tags/${tags[0].name}.zip`;

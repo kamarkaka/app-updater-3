@@ -3,14 +3,7 @@ import { api } from "../api/client";
 import type { Download } from "../types";
 import StatusBadge from "../components/StatusBadge";
 import DownloadProgress from "../components/DownloadProgress";
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
-}
+import { formatBytes } from "../utils/format";
 
 export default function Downloads() {
   const [downloads, setDownloads] = useState<Download[]>([]);
@@ -29,9 +22,10 @@ export default function Downloads() {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 2000);
+    const hasActive = downloads.some((d) => d.status === "downloading");
+    const interval = setInterval(load, hasActive ? 2000 : 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [downloads.some((d) => d.status === "downloading")]);
 
   async function handlePause(id: number) {
     await api.pauseDownload(id);

@@ -9,12 +9,13 @@ import {
 } from "../services/downloadManager.js";
 
 export default async function downloadRoutes(fastify: FastifyInstance) {
-  // List all downloads
+  // List recent downloads (active + last 50)
   fastify.get("/api/downloads", async () => {
     return db
       .select()
       .from(downloads)
       .orderBy(desc(downloads.createdAt))
+      .limit(50)
       .all();
   });
 

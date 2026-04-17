@@ -4,7 +4,7 @@ import { eq, desc } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { applications, downloads } from "../db/schema.js";
 import { classifySource } from "../services/providers/classifier.js";
-import { checkAppForUpdates } from "../services/versionChecker.js";
+import { checkAppForUpdates, clearLatestResult } from "../services/versionChecker.js";
 import { queueDownload } from "../services/downloadManager.js";
 
 const createAppSchema = z.object({
@@ -98,6 +98,7 @@ export default async function appRoutes(fastify: FastifyInstance) {
     if (!existing) return reply.code(404).send({ error: "Not found" });
 
     db.delete(applications).where(eq(applications.id, id)).run();
+    clearLatestResult(id);
     return { ok: true };
   });
 

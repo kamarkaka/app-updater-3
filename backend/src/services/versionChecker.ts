@@ -34,6 +34,10 @@ export function getLatestResult(appId: number): VersionResult | undefined {
   return latestResults.get(appId);
 }
 
+export function clearLatestResult(appId: number) {
+  latestResults.delete(appId);
+}
+
 export async function checkAppForUpdates(app: Application): Promise<CheckResult> {
   const provider = getProvider(app);
   const result = await provider.detect(app);

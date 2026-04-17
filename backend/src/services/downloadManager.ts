@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Writable } from "node:stream";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { applications, downloads, Application, Download } from "../db/schema.js";
 import { appConfig } from "../config.js";
@@ -17,9 +16,7 @@ function sanitizeName(name: string): string {
 
 function getDownloadDir(appName: string): string {
   const dir = path.join(appConfig.downloadDir, sanitizeName(appName));
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
 
@@ -45,9 +42,13 @@ export async function queueDownload(app: Application): Promise<Download> {
   const existing = db
     .select()
     .from(downloads)
-    .where(eq(downloads.applicationId, app.id))
-    .all()
-    .find((d) => d.version === result.version);
+    .where(
+      and(
+        eq(downloads.applicationId, app.id),
+        eq(downloads.version, result.version)
+      )
+    )
+    .get();
 
   if (existing) {
     if (existing.status === "completed") {
@@ -162,10 +163,7 @@ async function startDownload(downloadId: number) {
         .run();
     }
 
-    const dir = path.dirname(partPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+    fs.mkdirSync(path.dirname(partPath), { recursive: true });
 
     const fileStream = fs.createWriteStream(partPath, {
       flags: downloadedBytes > 0 ? "a" : "w",
@@ -182,7 +180,10 @@ async function startDownload(downloadId: number) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        fileStream.write(value);
+        const canContinue = fileStream.write(value);
+        if (!canContinue) {
+          await new Promise<void>((r) => fileStream.once("drain", r));
+        }
         downloadedBytes += value.byteLength;
 
         // Update DB every ~1MB or 5 seconds
@@ -278,10 +279,8 @@ export async function cancelDownload(downloadId: number) {
     .get();
 
   if (download?.filePath) {
-    // Remove files
-    const partPath = download.filePath + ".part";
-    if (fs.existsSync(partPath)) fs.unlinkSync(partPath);
-    if (fs.existsSync(download.filePath)) fs.unlinkSync(download.filePath);
+    fs.rmSync(download.filePath + ".part", { force: true });
+    fs.rmSync(download.filePath, { force: true });
   }
 
   db.delete(downloads).where(eq(downloads.id, downloadId)).run();

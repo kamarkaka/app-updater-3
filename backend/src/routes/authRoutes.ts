@@ -7,6 +7,18 @@ import {
   hasUsers,
 } from "../auth/auth.js";
 import { appConfig } from "../config.js";
+import type { FastifyReply } from "fastify";
+
+const SESSION_MAX_AGE_SEC = appConfig.sessionMaxAgeDays * 24 * 60 * 60;
+
+function setSessionCookie(reply: FastifyReply, token: string) {
+  reply.setCookie("session", token, {
+    httpOnly: true,
+    sameSite: "strict",
+    path: "/",
+    maxAge: SESSION_MAX_AGE_SEC,
+  });
+}
 
 const credentialsSchema = z.object({
   username: z.string().min(1).max(100),
@@ -29,12 +41,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
     await createUser(body.username, body.password);
 
     const token = await authenticateUser(body.username, body.password);
-    reply.setCookie("session", token!, {
-      httpOnly: true,
-      sameSite: "strict",
-      path: "/",
-      maxAge: appConfig.sessionMaxAgeDays * 24 * 60 * 60,
-    });
+    setSessionCookie(reply, token!);
     return { ok: true };
   });
 
@@ -46,12 +53,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
       return reply.code(401).send({ error: "Invalid credentials" });
     }
 
-    reply.setCookie("session", token, {
-      httpOnly: true,
-      sameSite: "strict",
-      path: "/",
-      maxAge: appConfig.sessionMaxAgeDays * 24 * 60 * 60,
-    });
+    setSessionCookie(reply, token);
     return { ok: true };
   });
 

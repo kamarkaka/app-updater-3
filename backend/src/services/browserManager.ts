@@ -4,24 +4,12 @@ import type { Browser } from "puppeteer";
 
 puppeteer.use(StealthPlugin());
 
-let browser: Browser | null = null;
+let browserPromise: Promise<Browser> | null = null;
 let pageCount = 0;
 const MAX_PAGES_BEFORE_RESTART = 50;
 
-export async function getBrowser(): Promise<Browser> {
-  if (browser && browser.connected && pageCount < MAX_PAGES_BEFORE_RESTART) {
-    return browser;
-  }
-
-  if (browser) {
-    try {
-      await browser.close();
-    } catch {
-      // ignore
-    }
-  }
-
-  browser = await puppeteer.launch({
+async function launchBrowser(): Promise<Browser> {
+  return puppeteer.launch({
     headless: true,
     args: [
       "--no-sandbox",
@@ -30,9 +18,22 @@ export async function getBrowser(): Promise<Browser> {
       "--disable-gpu",
     ],
   }) as unknown as Browser;
-  pageCount = 0;
+}
 
-  return browser;
+export async function getBrowser(): Promise<Browser> {
+  if (browserPromise) {
+    const browser = await browserPromise;
+    if (browser.connected && pageCount < MAX_PAGES_BEFORE_RESTART) {
+      return browser;
+    }
+    // Stale — close and relaunch
+    try { await browser.close(); } catch { /* ignore */ }
+    browserPromise = null;
+  }
+
+  browserPromise = launchBrowser();
+  pageCount = 0;
+  return browserPromise;
 }
 
 export function incrementPageCount() {
@@ -40,13 +41,12 @@ export function incrementPageCount() {
 }
 
 export async function closeBrowser() {
-  if (browser) {
+  if (browserPromise) {
     try {
+      const browser = await browserPromise;
       await browser.close();
-    } catch {
-      // ignore
-    }
-    browser = null;
+    } catch { /* ignore */ }
+    browserPromise = null;
     pageCount = 0;
   }
 }
