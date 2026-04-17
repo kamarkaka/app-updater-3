@@ -21,8 +21,8 @@ const VERSION_KEYWORDS = [
 // Date-like patterns that the version regex might match (e.g., "January 17, 2023" → "17.01")
 const DATE_CONTEXT_REGEX = /(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+\d|,\s*\d{4}|\d{4}[-/]\d{2}/i;
 
-// OS names that precede version-like numbers (e.g., "Windows 8.1", "macOS 14.2")
-const OS_PREFIX_REGEX = /(?:windows|macos|mac\s*os\s*x?|os\s*x|android|ios|ubuntu|debian|fedora|rhel|centos)\s+$/i;
+// Product/OS names that precede version-like numbers — these are not the software's own version
+const PRODUCT_PREFIX_REGEX = /(?:windows|macos|mac\s*os\s*x?|os\s*x|android|ios|ubuntu|debian|fedora|rhel|centos|geforce|radeon|intel|nvidia|amd|driver|drivers|directx|opengl|vulkan|cuda|bios|firmware|kernel)\s+$/i;
 
 // Size units that follow version-like numbers (e.g., "8.1 MB")
 const SIZE_SUFFIX_REGEX = /^\s*(?:b|kb|mb|gb|tb|bytes|kib|mib|gib)\b/i;
@@ -35,8 +35,8 @@ function shouldSkipVersion(version: string, fullMatch: string, fullText: string,
   // Check if followed by a size unit (e.g., "8.1 MB")
   if (SIZE_SUFFIX_REGEX.test(textAfter)) return true;
 
-  // Check if preceded by an OS name (e.g., "Windows 8.1")
-  if (OS_PREFIX_REGEX.test(textBefore)) return true;
+  // Check if preceded by a product/OS/driver name (e.g., "Windows 8.1", "GeForce 576.02")
+  if (PRODUCT_PREFIX_REGEX.test(textBefore)) return true;
 
   // Check if the version is immediately adjacent to date context
   // (e.g., "January 17.01" or "12.05, 2023") — only check nearby text, not the whole element
@@ -178,23 +178,37 @@ function extractDownloadLinks($: cheerio.CheerioAPI, baseUrl: string, selector?:
 
   // Also look for download-intent links (text or href suggests a download,
   // even without a file extension). These are entry points for pages like
-  // SourceForge where the actual download is behind a countdown/redirect.
+  // SourceForge where the actual download is behind a countdown/redirect,
+  // or Geeks3D where link text mentions the file type (e.g., "(ZIP)", "(SETUP)").
   if (links.length === 0) {
+    const FILE_TYPE_HINTS = /\b(zip|exe|msi|setup|installer|dmg|pkg|deb|rpm|appimage|tar\.gz|7z|7zip)\b/i;
+    const fileTypeLinks: string[] = [];
+    const downloadTextLinks: string[] = [];
+
     $("a[href]").each((_, el) => {
       const $a = $(el);
       const href = $a.attr("href") || "";
       const text = ($a.text() || "").toLowerCase().trim();
 
-      // Match links whose text says "download" or whose href path contains "download"
-      const textIsDownload = DOWNLOAD_BUTTON_TEXTS.some((t) => text.includes(t));
-      const hrefIsDownload = /\/download(\/|$|\?)/i.test(href);
+      try {
+        const fullUrl = new URL(href, baseUrl).href;
+        // Skip links pointing back to the current page
+        if (fullUrl === baseUrl || fullUrl === baseUrl + "/") return;
 
-      if (textIsDownload || hrefIsDownload) {
-        try {
-          links.push(new URL(href, baseUrl).href);
-        } catch { /* skip */ }
-      }
+        if (FILE_TYPE_HINTS.test(text)) {
+          fileTypeLinks.push(fullUrl);
+        } else if (/\/download(\/|$|\?)/i.test(href)) {
+          downloadTextLinks.push(fullUrl);
+        } else if (/^download( |$)/i.test(text) || /^download (now|latest)/i.test(text)) {
+          // Strict match: text starts with "download", not just contains it
+          // Avoids matching nav links like "Downloads", "Download Center"
+          downloadTextLinks.push(fullUrl);
+        }
+      } catch { /* skip */ }
     });
+
+    // Prefer file-type links, fall back to download-text links
+    links.push(...(fileTypeLinks.length > 0 ? fileTypeLinks : downloadTextLinks));
   }
 
   if (pattern) {
@@ -232,13 +246,15 @@ async function resolveDownloadUrl(
     const contentDisposition = headers["content-disposition"] || "";
     const contentType = headers["content-type"] || "";
 
-    if (
+    const isBinary =
       contentDisposition.includes("attachment") ||
-      contentType === "application/octet-stream" ||
-      contentType === "application/zip" ||
-      contentType === "application/x-gzip" ||
-      contentType === "application/x-tar"
-    ) {
+      (contentType.startsWith("application/") &&
+        !contentType.includes("html") &&
+        !contentType.includes("json") &&
+        !contentType.includes("javascript") &&
+        !contentType.includes("xml"));
+
+    if (isBinary) {
       resolvedUrl = response.url();
     }
   };
@@ -252,67 +268,100 @@ async function resolveDownloadUrl(
   try {
     await page.goto(initialUrl, { waitUntil: "networkidle2", timeout: 30000 });
 
-    for (let depth = 0; depth < maxDepth; depth++) {
-      if (resolvedUrl) break;
-      if (Date.now() - startTime > timeout) break;
+    // Strategy 1: Extract download link hrefs from the page DOM first,
+    // without clicking anything. This avoids anti-bot issues entirely.
+    // Wait for JS timers to inject/update download buttons (up to 5s).
+    async function extractDownloadHref(): Promise<string | null> {
+      const pageUrl = page.url();
 
-      // Look for download button/link
-      const downloadSelector = app.downloadSelector;
-      let clicked = false;
+      // Poll for up to 5 seconds — handles pages where JS injects buttons after a delay
+      for (let attempt = 0; attempt < 5; attempt++) {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 1000));
 
-      if (downloadSelector) {
-        try {
-          await page.waitForSelector(downloadSelector, { timeout: 5000 });
-          await page.click(downloadSelector);
-          clicked = true;
-        } catch { /* selector not found */ }
-      }
+        const result = await page.evaluate(() => {
+          const links = document.querySelectorAll("a[href]");
+          for (const link of links) {
+            const href = link.getAttribute("href") || "";
+            const text = (link.textContent || "").trim().toLowerCase();
 
-      if (!clicked) {
-        // Try heuristic text matching
-        for (const text of DOWNLOAD_BUTTON_TEXTS) {
-          try {
-            const elements = await page.$$(`a, button, input[type="submit"]`);
-            for (const el of elements) {
-              const elText = await el.evaluate((node) =>
-                (node.textContent || "").trim().toLowerCase()
-              );
-              if (elText.includes(text)) {
-                await el.click();
-                clicked = true;
-                break;
-              }
+            // Skip empty and anchor-only links
+            if (!href || href === "#" || href.startsWith("javascript:")) continue;
+
+            // Match links with download file extensions
+            if (/\.(zip|exe|msi|dmg|pkg|deb|rpm|appimage|tar\.gz|tar\.xz|7z|rar)\b/i.test(href)) {
+              return href;
             }
-            if (clicked) break;
-          } catch { /* continue */ }
+
+            // Match links whose text is primarily "download" (not nav links like "Downloads page")
+            if (/^(\W*download\W*(\(.*\))?\s*)$/i.test(text) || /^download\s*$/i.test(text.split("\n")[0])) {
+              return href;
+            }
+          }
+          return null;
+        });
+
+        if (result) {
+          try { return new URL(result, pageUrl).href; } catch { /* skip */ }
         }
       }
+      return null;
+    }
 
-      if (!clicked) {
-        // Try links with download extensions
-        const links = await page.$$("a[href]");
-        for (const link of links) {
-          const href = await link.evaluate((el) => el.getAttribute("href") || "");
-          if (DOWNLOAD_EXTENSIONS.test(href)) {
-            resolvedUrl = new URL(href, page.url()).href;
-            break;
+    const hrefUrl = await extractDownloadHref();
+    if (hrefUrl) {
+      resolvedUrl = hrefUrl;
+    }
+
+    // Strategy 2: If no href extracted, try clicking download buttons
+    // and intercepting the download via CDP.
+    if (!resolvedUrl) {
+      for (let depth = 0; depth < maxDepth; depth++) {
+        if (resolvedUrl) break;
+        if (Date.now() - startTime > timeout) break;
+
+        const downloadSelector = app.downloadSelector;
+        let clicked = false;
+
+        if (downloadSelector) {
+          try {
+            await page.waitForSelector(downloadSelector, { timeout: 5000 });
+            await page.click(downloadSelector);
+            clicked = true;
+          } catch { /* selector not found */ }
+        }
+
+        if (!clicked) {
+          for (const text of DOWNLOAD_BUTTON_TEXTS) {
+            try {
+              const elements = await page.$$(`a, button, input[type="submit"]`);
+              for (const el of elements) {
+                const elText = await el.evaluate((node) =>
+                  (node.textContent || "").trim().toLowerCase()
+                );
+                if (elText.includes(text)) {
+                  await el.click();
+                  clicked = true;
+                  break;
+                }
+              }
+              if (clicked) break;
+            } catch { /* continue */ }
           }
         }
-        if (resolvedUrl) break;
-      }
 
-      // Wait for navigation or download to trigger
-      const remainingTime = Math.min(15000, timeout - (Date.now() - startTime));
-      if (remainingTime <= 0) break;
+        if (!clicked) break;
 
-      try {
-        await page.waitForNavigation({ timeout: remainingTime, waitUntil: "networkidle2" });
-      } catch {
-        // No navigation happened — might be a timer-based download
-        // Wait a bit more for the download event
-        const extraWait = Math.min(10000, timeout - (Date.now() - startTime));
-        if (extraWait > 0 && !resolvedUrl) {
-          await new Promise((r) => setTimeout(r, extraWait));
+        // Wait for navigation or download to trigger after click
+        const remainingTime = Math.min(15000, timeout - (Date.now() - startTime));
+        if (remainingTime <= 0) break;
+
+        try {
+          await page.waitForNavigation({ timeout: remainingTime, waitUntil: "networkidle2" });
+        } catch {
+          const extraWait = Math.min(10000, timeout - (Date.now() - startTime));
+          if (extraWait > 0 && !resolvedUrl) {
+            await new Promise((r) => setTimeout(r, extraWait));
+          }
         }
       }
     }

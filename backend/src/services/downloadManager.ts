@@ -112,8 +112,8 @@ async function startDownload(downloadId: number) {
           .set({ url: downloadUrl })
           .where(eq(downloads.id, downloadId))
           .run();
-      } catch {
-        // Fall back to the original URL
+      } catch (err: any) {
+        console.error(`[download] URL resolution failed for ${download.url}: ${err.message}`);
       }
     }
 
@@ -143,6 +143,16 @@ async function startDownload(downloadId: number) {
 
     if (!response.ok && response.status !== 206) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    // Reject HTML responses — means URL resolution failed and we got a webpage, not a binary
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("text/html")) {
+      throw new Error(
+        `Download URL returned HTML instead of a binary file. ` +
+        `The URL may require browser navigation to reach the actual download. ` +
+        `URL: ${downloadUrl}`
+      );
     }
 
     // If server doesn't support Range, restart
