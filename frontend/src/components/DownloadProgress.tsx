@@ -5,6 +5,7 @@ export default function DownloadProgress({ download }: { download: Download }) {
   const downloaded = download.downloadedBytes ?? 0;
   const total = download.totalBytes ?? 0;
   const percent = total > 0 ? Math.round((downloaded / total) * 100) : 0;
+  const indeterminate = total === 0 && downloaded > 0;
 
   return (
     <div className="w-full">
@@ -15,11 +16,15 @@ export default function DownloadProgress({ download }: { download: Download }) {
         </span>
         {total > 0 && <span>{percent}%</span>}
       </div>
-      <div className="w-full bg-gray-800 rounded-full h-2">
-        <div
-          className="bg-blue-500 h-2 rounded-full transition-all duration-300"
-          style={{ width: `${percent}%` }}
-        />
+      <div className="w-full bg-gray-800 rounded-full h-2 overflow-hidden">
+        {indeterminate ? (
+          <div className="bg-blue-500 h-2 rounded-full w-1/3 animate-pulse" />
+        ) : (
+          <div
+            className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+            style={{ width: `${percent}%` }}
+          />
+        )}
       </div>
     </div>
   );

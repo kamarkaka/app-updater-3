@@ -172,7 +172,7 @@ async function startDownload(downloadId: number) {
     const body = response.body;
     if (!body) throw new Error("No response body");
 
-    let lastDbUpdate = Date.now();
+    let lastDbUpdate = 0;
     const reader = body.getReader();
 
     try {
@@ -186,11 +186,8 @@ async function startDownload(downloadId: number) {
         }
         downloadedBytes += value.byteLength;
 
-        // Update DB every ~1MB or 5 seconds
-        if (
-          downloadedBytes - (download.downloadedBytes ?? 0) > 1048576 ||
-          Date.now() - lastDbUpdate > 5000
-        ) {
+        // Update DB every 2 seconds so frontend polling sees progress
+        if (Date.now() - lastDbUpdate > 2000) {
           db.update(downloads)
             .set({ downloadedBytes })
             .where(eq(downloads.id, downloadId))

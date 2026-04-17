@@ -52,37 +52,42 @@ function extractVersions($: cheerio.CheerioAPI, selector?: string | null, patter
   }
 
   // Heuristic: find version strings near keywords
-  const textNodes: { text: string; depth: number; nearKeyword: boolean }[] = [];
+  // Check the element itself, parent, and grandparent for keyword proximity,
+  // since version text is often in a sibling/child of the keyword element.
+  function hasNearbyKeyword($el: cheerio.Cheerio<any>): boolean {
+    for (let i = 0; i < 3; i++) {
+      const text = ($el.text() || "").toLowerCase();
+      if (VERSION_KEYWORDS.some((kw) => text.includes(kw))) return true;
+      const $parent = $el.parent();
+      if ($parent.length === 0) break;
+      $el = $parent;
+    }
+    return false;
+  }
 
   $("h1, h2, h3, h4, h5, h6, p, span, div, a, li, td, th, strong, em, b, label").each((_, el) => {
     const $el = $(el);
-    // Get direct text, not nested children's text
-    const text = $el
+    // Only process leaf-level text (elements with direct text content)
+    const directText = $el
       .contents()
       .filter((_, node) => node.type === "text")
       .text()
       .trim();
-    if (!text) return;
+    if (!directText) return;
 
-    const tagName = (el as any).tagName?.toLowerCase() || "";
-    const depthScore = tagName.startsWith("h") ? (7 - parseInt(tagName[1])) * 5 : 0;
-
-    const lowerText = ($el.text() || "").toLowerCase();
-    const nearKeyword = VERSION_KEYWORDS.some((kw) => lowerText.includes(kw));
-
-    textNodes.push({ text: $el.text(), depth: depthScore, nearKeyword });
-  });
-
-  for (const node of textNodes) {
+    const fullText = $el.text();
     const regex = new RegExp(VERSION_REGEX.source, "g");
     let match;
-    while ((match = regex.exec(node.text)) !== null) {
-      let score = 0;
-      if (node.nearKeyword) score += 20;
-      score += node.depth;
+    while ((match = regex.exec(fullText)) !== null) {
+      const tagName = (el as any).tagName?.toLowerCase() || "";
+      const depthScore = tagName.startsWith("h") ? (7 - parseInt(tagName[1])) * 5 : 0;
+
+      let score = depthScore;
+      if (hasNearbyKeyword($el)) score += 20;
+
       candidates.push({ version: match[1], score });
     }
-  }
+  });
 
   // Deduplicate, then among keyword-adjacent candidates pick the highest version
   const seen = new Set<string>();
