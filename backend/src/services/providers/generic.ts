@@ -8,7 +8,7 @@ import { getBrowser, incrementPageCount } from "../browserManager.js";
 import { VersionProvider, VersionResult } from "./types.js";
 import { compareVersions } from "../versionCompare.js";
 
-const VERSION_REGEX = /\bv?(\d+\.\d+(?:\.\d+)?(?:[-+][\w.]+)?)\b/g;
+const VERSION_REGEX = /\bv?(\d+\.\d+(?:\.\d+){0,2}(?:[-+][\w.]+)?)\b/g;
 const VERSION_KEYWORDS = [
   "latest",
   "current",
@@ -29,18 +29,22 @@ const SIZE_SUFFIX_REGEX = /^\s*(?:b|kb|mb|gb|tb|bytes|kib|mib|gib)\b/i;
 
 function shouldSkipVersion(version: string, fullMatch: string, fullText: string, matchIndex: number): boolean {
   const matchEnd = matchIndex + fullMatch.length;
+  const textBefore = fullText.slice(Math.max(0, matchIndex - 30), matchIndex);
+  const textAfter = fullText.slice(matchEnd, matchEnd + 10);
 
   // Check if followed by a size unit (e.g., "8.1 MB")
-  const textAfter = fullText.slice(matchEnd, matchEnd + 10);
   if (SIZE_SUFFIX_REGEX.test(textAfter)) return true;
 
-  // Check date context
-  const major = parseInt(version.split(".")[0]);
-  if (major < 100 && DATE_CONTEXT_REGEX.test(fullText)) return true;
-
   // Check if preceded by an OS name (e.g., "Windows 8.1")
-  const textBefore = fullText.slice(Math.max(0, matchIndex - 30), matchIndex);
   if (OS_PREFIX_REGEX.test(textBefore)) return true;
+
+  // Check if the version is immediately adjacent to date context
+  // (e.g., "January 17.01" or "12.05, 2023") — only check nearby text, not the whole element
+  const major = parseInt(version.split(".")[0]);
+  if (major < 100) {
+    const nearby = textBefore.slice(-20) + fullMatch + textAfter;
+    if (DATE_CONTEXT_REGEX.test(nearby)) return true;
+  }
 
   return false;
 }
