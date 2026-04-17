@@ -55,12 +55,11 @@ export async function queueDownload(app: Application): Promise<Download> {
     .get();
 
   if (existing) {
-    if (existing.status === "completed") {
-      throw new Error(`Version ${result.version} already downloaded`);
+    if (existing.status === "downloading") {
+      return existing;
     }
-    // Resume existing download
-    resumeDownload(existing.id);
-    return existing;
+    // Remove old download (completed, paused, or failed) to re-download
+    await cancelDownload(existing.id);
   }
 
   const download = db
