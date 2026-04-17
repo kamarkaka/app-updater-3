@@ -19,7 +19,7 @@ export default function AppForm() {
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [sourceType, setSourceType] = useState("auto");
-  const [checkInterval, setCheckInterval] = useState(360);
+  const [checkInterval, setCheckInterval] = useState(720);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [versionSelector, setVersionSelector] = useState("");
   const [versionPattern, setVersionPattern] = useState("");
@@ -35,7 +35,7 @@ export default function AppForm() {
         setName(app.name);
         setUrl(app.url);
         setSourceType(app.sourceType);
-        setCheckInterval(app.checkIntervalMinutes ?? 360);
+        setCheckInterval(app.checkIntervalMinutes ?? 720);
         setVersionSelector(app.versionSelector ?? "");
         setVersionPattern(app.versionPattern ?? "");
         setDownloadSelector(app.downloadSelector ?? "");
