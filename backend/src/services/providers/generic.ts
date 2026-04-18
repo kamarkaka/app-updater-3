@@ -9,7 +9,8 @@ import { VersionProvider, VersionResult } from "./types.js";
 import { compareVersions } from "../versionCompare.js";
 
 // Matches dotted versions (1.2, 1.2.3, 1.2.3.4) and "Build XXXX" patterns
-const VERSION_REGEX = /\bv?(\d+\.\d+(?:\.\d+){0,2}(?:[-+][\w.]+)?)\b|\bbuild\s+(\d+)\b/gi;
+// Pre-release suffix: -alpha, -beta.1, -rc, -rc.2 (not filenames like -64.zip, -install.exe)
+const VERSION_REGEX = /\bv?(\d+\.\d+(?:\.\d+){0,2}(?:-(?:alpha|beta|rc|dev|pre|snapshot)(?:\.\d+)?)?)\b|\bbuild\s+(\d+)\b/gi;
 const VERSION_KEYWORDS = [
   "latest",
   "current",
@@ -74,12 +75,12 @@ const DOWNLOAD_BUTTON_TEXTS = [
   "start download",
 ];
 
-interface VersionCandidate {
+export interface VersionCandidate {
   version: string;
   score: number;
 }
 
-function extractVersions($: cheerio.CheerioAPI, selector?: string | null, pattern?: string | null, nameFilter?: string | null): VersionCandidate[] {
+export function extractVersions($: cheerio.CheerioAPI, selector?: string | null, pattern?: string | null, nameFilter?: string | null): VersionCandidate[] {
   const candidates: VersionCandidate[] = [];
 
   // If user provided a selector + pattern, use those

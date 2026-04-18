@@ -7,7 +7,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "test": "node --import tsx --test test/version-detection.test.ts",
+    "test:fetch-fixtures": "npx tsx test/fetch-fixtures.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",
