@@ -11,11 +11,9 @@ export interface Application {
   errorMessage: string | null;
   versionSelector: string | null;
   versionPattern: string | null;
-  downloadSelector: string | null;
-  downloadPattern: string | null;
   assetPattern: string | null;
-  maxNavigationDepth: number | null;
-  downloadTimeout: number | null;
+  downloadUrl: string | null;
+  downloadSteps: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -47,6 +45,11 @@ export interface CheckResult {
   hasUpdate: boolean;
   downloadUrls: string[];
   changelog?: string;
+}
+
+export interface DownloadStep {
+  selector?: string;
+  textPattern?: string;
 }
 
 export interface VersionSuggestion {

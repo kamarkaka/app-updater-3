@@ -5,7 +5,8 @@ import { db } from "../db/client.js";
 import { applications, downloads, Application, Download } from "../db/schema.js";
 import { appConfig } from "../config.js";
 import { getLatestResult, checkAppForUpdates } from "./versionChecker.js";
-import { resolveGenericDownloadUrl } from "./providers/generic.js";
+import { resolveDownloadWithSteps } from "./providers/generic.js";
+import { DownloadStep } from "./providers/types.js";
 
 // Common downloadable file extensions (for detecting real filenames)
 const DOWNLOAD_EXTENSIONS_SIMPLE =
@@ -25,20 +26,36 @@ function getDownloadDir(appName: string): string {
 }
 
 export async function queueDownload(app: Application): Promise<Download> {
-  let result = getLatestResult(app.id);
+  let version: string;
+  let url: string;
+  let fileName: string;
 
-  // If no cached result (e.g. server restarted since last check), re-run detection
-  if (!result || result.downloadUrls.length === 0) {
-    await checkAppForUpdates(app);
-    result = getLatestResult(app.id);
+  if (app.sourceType === "github") {
+    // GitHub: use cached download URLs from the API
+    let result = getLatestResult(app.id);
+    if (!result || result.downloadUrls.length === 0) {
+      await checkAppForUpdates(app);
+      result = getLatestResult(app.id);
+    }
+    if (!result || result.downloadUrls.length === 0) {
+      throw new Error("No download URL found. Run a version check first.");
+    }
+    version = result.version;
+    url = result.downloadUrls[0];
+    fileName = decodeURIComponent(path.basename(new URL(url).pathname)) || `${sanitizeName(app.name)}-${version}`;
+  } else {
+    // Generic: download URL will be resolved at download time via steps
+    if (!app.latestVersion) {
+      throw new Error("No version detected yet. Run a version check first.");
+    }
+    if (!app.downloadSteps) {
+      throw new Error("Download steps are required for generic sources. Edit the application to configure them.");
+    }
+    version = app.latestVersion;
+    url = app.url;
+    fileName = `${sanitizeName(app.name)}-${version}`;
   }
 
-  if (!result || result.downloadUrls.length === 0) {
-    throw new Error("No download URL found for this application.");
-  }
-
-  const url = result.downloadUrls[0];
-  const fileName = decodeURIComponent(path.basename(new URL(url).pathname)) || `${app.name}-${result.version}`;
   const dir = getDownloadDir(app.name);
   const filePath = path.join(dir, fileName);
 
@@ -49,7 +66,7 @@ export async function queueDownload(app: Application): Promise<Download> {
     .where(
       and(
         eq(downloads.applicationId, app.id),
-        eq(downloads.version, result.version)
+        eq(downloads.version, version)
       )
     )
     .get();
@@ -58,7 +75,6 @@ export async function queueDownload(app: Application): Promise<Download> {
     if (existing.status === "downloading") {
       return existing;
     }
-    // Remove old download (completed, paused, or failed) to re-download
     await cancelDownload(existing.id);
   }
 
@@ -66,7 +82,7 @@ export async function queueDownload(app: Application): Promise<Download> {
     .insert(downloads)
     .values({
       applicationId: app.id,
-      version: result.version,
+      version,
       url,
       fileName,
       filePath,
@@ -98,22 +114,22 @@ async function startDownload(downloadId: number) {
     .run();
 
   try {
-    // For generic sources, resolve the raw page link to a direct download URL
     let downloadUrl = download.url;
     const app = db
       .select()
       .from(applications)
       .where(eq(applications.id, download.applicationId))
       .get();
-    if (app && app.sourceType === "generic") {
-      try {
-        downloadUrl = await resolveGenericDownloadUrl(download.url, app);
+
+    // For generic sources, resolve download URL using user-defined steps
+    if (app && app.sourceType === "generic" && app.downloadSteps) {
+      const steps: DownloadStep[] = JSON.parse(app.downloadSteps);
+      if (steps.length > 0) {
+        downloadUrl = await resolveDownloadWithSteps(app.downloadUrl || app.url, steps);
         db.update(downloads)
           .set({ url: downloadUrl })
           .where(eq(downloads.id, downloadId))
           .run();
-      } catch (err: any) {
-        console.error(`[download] URL resolution failed for ${download.url}: ${err.message}`);
       }
     }
 
@@ -145,12 +161,11 @@ async function startDownload(downloadId: number) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
-    // Reject HTML responses — means URL resolution failed and we got a webpage, not a binary
+    // Reject HTML responses — means URL resolution failed
     const contentType = response.headers.get("content-type") || "";
     if (contentType.includes("text/html")) {
       throw new Error(
         `Download URL returned HTML instead of a binary file. ` +
-        `The URL may require browser navigation to reach the actual download. ` +
         `URL: ${downloadUrl}`
       );
     }
@@ -163,7 +178,6 @@ async function startDownload(downloadId: number) {
     // Detect real filename from (in priority order):
     // 1. Content-Disposition header
     // 2. Final URL path after redirects (response.url)
-    // 3. Resolved download URL path
     let realName: string | null = null;
 
     const contentDisposition = response.headers.get("content-disposition") || "";
@@ -173,7 +187,6 @@ async function startDownload(downloadId: number) {
     }
 
     if (!realName || !DOWNLOAD_EXTENSIONS_SIMPLE.test(realName)) {
-      // Check the final URL after redirects (e.g., CDN URL with real filename)
       try {
         const finalPath = decodeURIComponent(path.basename(new URL(response.url).pathname));
         if (DOWNLOAD_EXTENSIONS_SIMPLE.test(finalPath)) {
@@ -237,7 +250,6 @@ async function startDownload(downloadId: number) {
         }
         downloadedBytes += value.byteLength;
 
-        // Update DB every 2 seconds so frontend polling sees progress
         if (Date.now() - lastDbUpdate > 2000) {
           db.update(downloads)
             .set({ downloadedBytes })
@@ -260,7 +272,6 @@ async function startDownload(downloadId: number) {
       fs.renameSync(partPath, download.filePath);
     }
 
-    // Mark completed
     db.update(downloads)
       .set({
         status: "completed",
@@ -270,14 +281,12 @@ async function startDownload(downloadId: number) {
       .where(eq(downloads.id, downloadId))
       .run();
 
-    // Update application's current version
     db.update(applications)
       .set({ currentVersion: download.version, updatedAt: new Date() })
       .where(eq(applications.id, download.applicationId))
       .run();
   } catch (err: any) {
     if (err.name === "AbortError") {
-      // Paused by user
       db.update(downloads)
         .set({ status: "paused" })
         .where(eq(downloads.id, downloadId))
@@ -298,11 +307,9 @@ export function pauseDownload(downloadId: number) {
   if (controller) {
     controller.abort();
   }
-  // Final DB state set in the catch block of startDownload
 }
 
 export function resumeDownload(downloadId: number) {
-  // Re-read download state to get current downloadedBytes
   const download = db
     .select()
     .from(downloads)
@@ -314,7 +321,6 @@ export function resumeDownload(downloadId: number) {
 }
 
 export async function cancelDownload(downloadId: number) {
-  // Abort if active
   const controller = activeDownloads.get(downloadId);
   if (controller) {
     controller.abort();
@@ -335,7 +341,6 @@ export async function cancelDownload(downloadId: number) {
 }
 
 export function recoverInterruptedDownloads() {
-  // On startup, mark any "downloading" entries as "paused"
   db.update(downloads)
     .set({ status: "paused" })
     .where(eq(downloads.status, "downloading"))

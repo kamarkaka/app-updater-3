@@ -3,7 +3,7 @@ import type { Element } from "domhandler";
 import type { Page, CDPSession } from "puppeteer";
 import { Application } from "../../db/schema.js";
 import { getBrowser, incrementPageCount } from "../browserManager.js";
-import { VersionProvider, VersionResult } from "./types.js";
+import { VersionProvider, VersionResult, DownloadStep } from "./types.js";
 
 const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -63,17 +63,6 @@ function shouldSkipVersion(version: string, fullMatch: string, fullText: string,
 
 // Keywords that strongly indicate the actual latest version
 const LATEST_KEYWORDS = ["latest", "newest", "current", "stable"];
-const DOWNLOAD_EXTENSIONS =
-  /\.(dmg|exe|msi|pkg|zip|tar\.gz|tar\.xz|tar\.bz2|appimage|deb|rpm|snap|flatpak|7z|rar)$/i;
-
-const DOWNLOAD_BUTTON_TEXTS = [
-  "download",
-  "download now",
-  "direct download",
-  "free download",
-  "get",
-  "start download",
-];
 
 export interface VersionSuggestion {
   version: string;
@@ -228,315 +217,6 @@ export function suggestVersions($: cheerio.CheerioAPI): VersionSuggestion[] {
   }));
 }
 
-export function extractDownloadLinks($: cheerio.CheerioAPI, baseUrl: string, selector?: string | null, pattern?: string | null): string[] {
-  const links: string[] = [];
-
-  if (selector) {
-    $(selector).each((_, el) => {
-      const href = $(el).attr("href");
-      if (href) {
-        try {
-          links.push(new URL(href, baseUrl).href);
-        } catch { /* skip invalid URLs */ }
-      }
-    });
-    if (links.length > 0) {
-      if (pattern) {
-        const regex = new RegExp(pattern, "i");
-        return links.filter((l) => regex.test(l));
-      }
-      return links;
-    }
-  }
-
-  // Heuristic: find all links pointing to downloadable files
-  $("a[href]").each((_, el) => {
-    const href = $(el).attr("href");
-    if (!href) return;
-    try {
-      const fullUrl = new URL(href, baseUrl).href;
-      if (DOWNLOAD_EXTENSIONS.test(fullUrl)) {
-        links.push(fullUrl);
-      }
-    } catch { /* skip */ }
-  });
-
-  // Also look for download-intent links (text or href suggests a download,
-  // even without a file extension). These are entry points for pages like
-  // SourceForge where the actual download is behind a countdown/redirect,
-  // or Geeks3D where link text mentions the file type (e.g., "(ZIP)", "(SETUP)").
-  // Always collect these when a download_pattern is set (the pattern might
-  // target intent-based URLs like /download_thanks?target=win-x64-portable).
-  if (links.length === 0 || pattern) {
-    // Match file type keywords when preceded by a dot (.zip, .exe) or in parens (ZIP).
-    // Excludes bare words like "MSI" (company name) from matching ".msi" (file type).
-    const FILE_TYPE_HINTS = /[.(](zip|exe|msi|dmg|pkg|deb|rpm|appimage|7z|7zip)\b|\b(setup|installer|tar\.gz|tar\.xz)\b/i;
-    const fileTypeLinks: string[] = [];
-    const downloadTextLinks: string[] = [];
-
-    $("a[href]").each((_, el) => {
-      const $a = $(el);
-      const href = $a.attr("href") || "";
-      const text = ($a.text() || "").toLowerCase().trim();
-
-      try {
-        const fullUrl = new URL(href, baseUrl).href;
-        // Skip links pointing to the current page or parent paths
-        if (fullUrl === baseUrl || fullUrl === baseUrl + "/") return;
-        const baseWithoutTrailing = baseUrl.replace(/\/$/, "");
-        if (baseWithoutTrailing.startsWith(fullUrl.replace(/\/$/, ""))) return;
-
-        if (FILE_TYPE_HINTS.test(text)) {
-          fileTypeLinks.push(fullUrl);
-        } else if (/\/download(?:_\w+)?(?:\/|$|\?)/i.test(href)) {
-          downloadTextLinks.push(fullUrl);
-        } else if (/^download( |$)/i.test(text) || /^download (now|latest)/i.test(text)) {
-          // Strict match: text starts with "download", not just contains it
-          // Avoids matching nav links like "Downloads", "Download Center"
-          downloadTextLinks.push(fullUrl);
-        }
-      } catch { /* skip */ }
-    });
-
-    // When a pattern is set, include all candidates so the pattern can select the right one.
-    // Otherwise prefer file-type links, fall back to download-text links.
-    if (pattern) {
-      links.push(...fileTypeLinks, ...downloadTextLinks);
-    } else {
-      links.push(...(fileTypeLinks.length > 0 ? fileTypeLinks : downloadTextLinks));
-    }
-  }
-
-  if (pattern) {
-    const regex = new RegExp(pattern, "i");
-    return links.filter((l) => regex.test(l));
-  }
-
-  return [...new Set(links)];
-}
-
-async function resolveDownloadUrl(
-  page: Page,
-  initialUrl: string,
-  app: Application
-): Promise<string> {
-  const maxDepth = app.maxNavigationDepth ?? 5;
-  const timeout = (app.downloadTimeout ?? 60) * 1000;
-  const startTime = Date.now();
-
-  // We only need the download URL, not the file. Use CDP Fetch domain
-  // to intercept responses at the network level — when we detect a binary
-  // download, capture the URL and fail the request so Chromium never
-  // receives the body and can't save it anywhere.
-  const cdp: CDPSession = await page.createCDPSession();
-  // Only intercept Document (navigation) responses — skips CSS, JS, images
-  await cdp.send("Fetch.enable" as any, {
-    patterns: [{ requestStage: "Response", resourceType: "Document" }],
-  });
-
-  let resolvedUrl: string | null = null;
-
-  cdp.on("Fetch.requestPaused" as any, async (event: any) => {
-    if (resolvedUrl) {
-      await cdp.send("Fetch.continueRequest" as any, {
-        requestId: event.requestId,
-      }).catch(() => {});
-      return;
-    }
-
-    const headers: Record<string, string> = {};
-    for (const h of event.responseHeaders || []) {
-      headers[h.name.toLowerCase()] = h.value;
-    }
-
-    const contentDisposition = headers["content-disposition"] || "";
-    const contentType = headers["content-type"] || "";
-
-    const isBinary =
-      contentDisposition.includes("attachment") ||
-      (contentType.startsWith("application/") &&
-        !contentType.includes("html") &&
-        !contentType.includes("json") &&
-        !contentType.includes("javascript") &&
-        !contentType.includes("xml"));
-
-    if (isBinary) {
-      resolvedUrl = event.request.url;
-      await cdp.send("Fetch.failRequest" as any, {
-        requestId: event.requestId,
-        reason: "Aborted",
-      }).catch(() => {});
-    } else {
-      await cdp.send("Fetch.continueRequest" as any, {
-        requestId: event.requestId,
-      }).catch(() => {});
-    }
-  });
-
-  try {
-    await page.goto(initialUrl, { waitUntil: "networkidle2", timeout: 30000 });
-
-    // Strategy 1: Extract download link hrefs from the page DOM first,
-    // without clicking anything. This avoids anti-bot issues entirely.
-    // Wait for JS timers to inject/update download buttons (up to 5s).
-    async function extractDownloadHref(): Promise<string | null> {
-      const pageUrl = page.url();
-
-      // Poll for up to 5 seconds — handles pages where JS injects buttons after a delay
-      for (let attempt = 0; attempt < 5; attempt++) {
-        // If CDP already intercepted an auto-download, no need to scan the DOM
-        if (resolvedUrl) return null;
-        if (attempt > 0) await new Promise((r) => setTimeout(r, 1000));
-
-        const appName = app.name.toLowerCase();
-        const result = await page.evaluate((appNameLower: string) => {
-          const links = document.querySelectorAll("a[href]");
-          let fallback: string | null = null;
-
-          for (const link of links) {
-            const href = link.getAttribute("href") || "";
-            const text = (link.textContent || "").trim().toLowerCase();
-
-            if (!href || href === "#" || href.startsWith("javascript:")) continue;
-
-            // Match links with download file extensions
-            if (/\.(zip|exe|msi|dmg|pkg|deb|rpm|appimage|tar\.gz|tar\.xz|7z|rar)\b/i.test(href)) {
-              // Prefer links containing the app name
-              if (href.toLowerCase().includes(appNameLower) || text.includes(appNameLower)) {
-                return href;
-              }
-              if (!fallback) fallback = href;
-              continue;
-            }
-
-            // Match links whose text is primarily "download"
-            if (/^(\W*download\W*(\(.*\))?\s*)$/i.test(text) || /^download\s*$/i.test(text.split("\n")[0])) {
-              if (!fallback) fallback = href;
-            }
-          }
-          // If we only have a fallback (no app-name match), check if the page
-          // has form submit buttons. If it does, return null so the click-through
-          // loop can handle form-based downloads (e.g., TechPowerUp mirror pages).
-          if (fallback) {
-            const hasFormButtons = document.querySelector('button[type="submit"], input[type="submit"]');
-            if (hasFormButtons) return null;
-          }
-          return fallback;
-        }, appName);
-
-        if (result) {
-          try { return new URL(result, pageUrl).href; } catch { /* skip */ }
-        }
-      }
-      return null;
-    }
-
-    const hrefUrl = await extractDownloadHref();
-    if (hrefUrl) {
-      resolvedUrl = hrefUrl;
-    }
-
-    // Strategy 2: If no href extracted, try clicking download buttons
-    // and intercepting the download via CDP.
-    if (!resolvedUrl) {
-      for (let depth = 0; depth < maxDepth; depth++) {
-        if (resolvedUrl) break;
-        if (Date.now() - startTime > timeout) break;
-
-        const downloadSelector = app.downloadSelector;
-        let clicked = false;
-
-        if (downloadSelector) {
-          try {
-            await page.waitForSelector(downloadSelector, { timeout: 5000 });
-            await page.click(downloadSelector);
-            clicked = true;
-          } catch { /* selector not found */ }
-        }
-
-        // Try form submit buttons first — they're a stronger signal than <a> tags
-        // on pages with mixed content (e.g., TechPowerUp has GPU-Z form button + NVIDIA sidebar links)
-        if (!clicked) {
-          try {
-            const appNameLower = app.name.toLowerCase();
-            const submitBtns = await page.$$('button[type="submit"], input[type="submit"]');
-            // Prefer submit buttons whose text contains the app name
-            let fallbackBtn = null;
-            for (const btn of submitBtns) {
-              const btnText = await btn.evaluate((node) =>
-                (node.textContent || "").trim().toLowerCase()
-              );
-              if (btnText.includes(appNameLower)) {
-                await btn.click();
-                clicked = true;
-                break;
-              }
-              if (!fallbackBtn) fallbackBtn = btn;
-            }
-            if (!clicked && fallbackBtn) {
-              await fallbackBtn.click();
-              clicked = true;
-            }
-          } catch { /* no submit buttons */ }
-        }
-
-        // Then try <a> links with download text, preferring ones matching app name
-        if (!clicked) {
-          const appNameLower = app.name.toLowerCase();
-          for (const text of DOWNLOAD_BUTTON_TEXTS) {
-            try {
-              const elements = await page.$$("a");
-              let fallbackEl = null;
-              for (const el of elements) {
-                const elText = await el.evaluate((node) =>
-                  (node.textContent || "").trim().toLowerCase()
-                );
-                if (elText.includes(text)) {
-                  if (elText.includes(appNameLower)) {
-                    await el.click();
-                    clicked = true;
-                    break;
-                  }
-                  if (!fallbackEl) fallbackEl = el;
-                }
-              }
-              if (!clicked && fallbackEl) {
-                await fallbackEl.click();
-                clicked = true;
-              }
-              if (clicked) break;
-            } catch { /* continue */ }
-          }
-        }
-
-        if (!clicked) break;
-
-        // Wait for navigation or download to trigger after click
-        const remainingTime = Math.min(15000, timeout - (Date.now() - startTime));
-        if (remainingTime <= 0) break;
-
-        try {
-          await page.waitForNavigation({ timeout: remainingTime, waitUntil: "networkidle2" });
-        } catch {
-          const extraWait = Math.min(10000, timeout - (Date.now() - startTime));
-          if (extraWait > 0 && !resolvedUrl) {
-            await new Promise((r) => setTimeout(r, extraWait));
-          }
-        }
-      }
-    }
-  } finally {
-    await cdp.send("Fetch.disable" as any).catch(() => {});
-    await cdp.detach();
-  }
-
-  if (!resolvedUrl) {
-    throw new Error("Could not resolve download URL after navigation");
-  }
-
-  return resolvedUrl;
-}
-
 async function withParsedPage<T>(
   url: string,
   handler: ($: cheerio.CheerioAPI) => T | Promise<T>
@@ -596,50 +276,136 @@ export const genericProvider: VersionProvider = {
         );
       }
 
-      let downloadUrls = extractDownloadLinks(
-        $,
-        app.url,
-        app.downloadSelector,
-        app.downloadPattern
-      );
-
-      if (app.assetPattern && downloadUrls.length > 0) {
-        const assetRegex = new RegExp(app.assetPattern, "i");
-        const filtered = downloadUrls.filter((u) => assetRegex.test(u));
-        if (filtered.length > 0) downloadUrls = filtered;
-      }
-
-      if (downloadUrls.length === 0) {
-        downloadUrls = [app.url];
-      }
-
-      return { version, downloadUrls };
+      return { version, downloadUrls: [] };
     });
   },
 };
 
 /**
- * Resolve a raw download link to the final direct-download URL.
- * Navigates through intermediate pages and countdown timers using Puppeteer.
- * Called at download time, NOT during version checks.
+ * Follow user-defined download steps to resolve a download URL.
+ * Each step clicks a matching element; CDP Fetch intercepts binary responses.
  */
-export async function resolveGenericDownloadUrl(
-  url: string,
-  app: Application
+export async function resolveDownloadWithSteps(
+  appUrl: string,
+  steps: DownloadStep[]
 ): Promise<string> {
-  // If URL already points to a downloadable file, no resolution needed
-  try {
-    const urlPath = new URL(url).pathname;
-    if (DOWNLOAD_EXTENSIONS.test(urlPath)) return url;
-  } catch { /* invalid URL, proceed with resolution */ }
-
   const browser = await getBrowser();
   const page = await browser.newPage();
   incrementPageCount();
 
   try {
     await page.setUserAgent(DEFAULT_USER_AGENT);
-    return await resolveDownloadUrl(page, url, app);
+
+    const cdp: CDPSession = await page.createCDPSession();
+    await cdp.send("Fetch.enable" as any, {
+      patterns: [{ requestStage: "Response", resourceType: "Document" }],
+    });
+
+    let resolvedUrl: string | null = null;
+
+    cdp.on("Fetch.requestPaused" as any, async (event: any) => {
+      if (resolvedUrl) {
+        await cdp.send("Fetch.continueRequest" as any, {
+          requestId: event.requestId,
+        }).catch(() => {});
+        return;
+      }
+
+      const headers: Record<string, string> = {};
+      for (const h of event.responseHeaders || []) {
+        headers[h.name.toLowerCase()] = h.value;
+      }
+
+      const contentDisposition = headers["content-disposition"] || "";
+      const contentType = headers["content-type"] || "";
+
+      const isBinary =
+        contentDisposition.includes("attachment") ||
+        (contentType.startsWith("application/") &&
+          !contentType.includes("html") &&
+          !contentType.includes("json") &&
+          !contentType.includes("javascript") &&
+          !contentType.includes("xml"));
+
+      if (isBinary) {
+        resolvedUrl = event.request.url;
+        await cdp.send("Fetch.failRequest" as any, {
+          requestId: event.requestId,
+          reason: "Aborted",
+        }).catch(() => {});
+      } else {
+        await cdp.send("Fetch.continueRequest" as any, {
+          requestId: event.requestId,
+        }).catch(() => {});
+      }
+    });
+
+    try {
+      await page.goto(appUrl, { waitUntil: "networkidle2", timeout: 30000 });
+
+      for (let i = 0; i < steps.length; i++) {
+        if (resolvedUrl) break;
+
+        const step = steps[i];
+        let clicked = false;
+
+        // Try CSS selector first
+        if (step.selector) {
+          try {
+            await page.waitForSelector(step.selector, { timeout: 10000 });
+            await page.click(step.selector);
+            clicked = true;
+          } catch { /* selector not found or not clickable */ }
+        }
+
+        // Fall back to (or combine with) text pattern matching
+        if (!clicked && step.textPattern) {
+          const pattern = step.textPattern;
+          clicked = await page.evaluate((pat: string) => {
+            const regex = new RegExp(pat, "i");
+            const candidates = document.querySelectorAll("a, button, input[type=submit], [role=button]");
+            for (const el of candidates) {
+              const text = (el.textContent || "").trim();
+              if (regex.test(text)) {
+                (el as HTMLElement).click();
+                return true;
+              }
+            }
+            return false;
+          }, pattern);
+        }
+
+        if (!clicked) {
+          throw new Error(
+            `Download step ${i + 1} did not match any element. ` +
+            `Selector: ${step.selector || "(none)"}, ` +
+            `Text pattern: ${step.textPattern || "(none)"}`
+          );
+        }
+
+        // Wait for navigation or download after click
+        if (!resolvedUrl) {
+          try {
+            await page.waitForNavigation({ timeout: 15000, waitUntil: "networkidle2" });
+          } catch {
+            // Navigation might not happen (e.g., JS-triggered download)
+            // Wait briefly for CDP to catch the download
+            if (!resolvedUrl) {
+              await new Promise((r) => setTimeout(r, 3000));
+            }
+          }
+        }
+      }
+    } finally {
+      await cdp.send("Fetch.disable" as any).catch(() => {});
+      await cdp.detach();
+    }
+
+    if (!resolvedUrl) {
+      throw new Error("Download steps completed but no download was triggered.");
+    }
+
+    return resolvedUrl;
   } finally {
     await page.close();
   }

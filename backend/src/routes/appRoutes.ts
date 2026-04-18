@@ -9,6 +9,11 @@ import { checkAppForUpdates, clearLatestResult } from "../services/versionChecke
 import { queueDownload, getActiveDownloadCount } from "../services/downloadManager.js";
 import { suggestVersionsForUrl } from "../services/providers/generic.js";
 
+const downloadStepSchema = z.object({
+  selector: z.string().optional(),
+  textPattern: z.string().optional(),
+});
+
 const createAppSchema = z.object({
   name: z.string().min(1).max(200),
   url: z.string().url(),
@@ -16,16 +21,18 @@ const createAppSchema = z.object({
   checkIntervalMinutes: z.number().int().min(1).optional(),
   versionSelector: z.string().optional(),
   versionPattern: z.string().optional(),
-  downloadSelector: z.string().optional(),
-  downloadPattern: z.string().optional(),
   assetPattern: z.string().optional(),
-  maxNavigationDepth: z.number().int().min(1).max(20).optional(),
-  downloadTimeout: z.number().int().min(5).max(300).optional(),
+  downloadUrl: z.string().url().optional(),
+  downloadSteps: z.array(downloadStepSchema).optional(),
 });
 
 const updateAppSchema = createAppSchema.partial().extend({
   status: z.enum(["active", "paused"]).optional(),
 });
+
+function canAutoDownload(app: { sourceType: string; downloadSteps: string | null }, hasDownloadUrls: boolean): boolean {
+  return hasDownloadUrls || (app.sourceType !== "github" && !!app.downloadSteps);
+}
 
 export default async function appRoutes(fastify: FastifyInstance) {
   // List all apps
@@ -80,6 +87,7 @@ export default async function appRoutes(fastify: FastifyInstance) {
         ...body,
         sourceType,
         checkIntervalMinutes: body.checkIntervalMinutes ?? appConfig.checkIntervalMinutes,
+        downloadSteps: body.downloadSteps ? JSON.stringify(body.downloadSteps) : undefined,
       })
       .returning()
       .get();
@@ -102,7 +110,12 @@ export default async function appRoutes(fastify: FastifyInstance) {
 
     const updated = db
       .update(applications)
-      .set({ ...body, sourceType, updatedAt: new Date() })
+      .set({
+        ...body,
+        sourceType,
+        downloadSteps: body.downloadSteps !== undefined ? JSON.stringify(body.downloadSteps) : undefined,
+        updatedAt: new Date(),
+      })
       .where(eq(applications.id, id))
       .returning()
       .get();
@@ -131,7 +144,7 @@ export default async function appRoutes(fastify: FastifyInstance) {
         const result = await checkAppForUpdates(app);
         results.push({ id: app.id, name: app.name, version: result.version, hasUpdate: result.hasUpdate });
 
-        if (result.hasUpdate && result.downloadUrls.length > 0 && getActiveDownloadCount() < appConfig.maxConcurrentDownloads) {
+        if (result.hasUpdate && canAutoDownload(app, result.downloadUrls.length > 0) && getActiveDownloadCount() < appConfig.maxConcurrentDownloads) {
           const freshApp = db.select().from(applications).where(eq(applications.id, app.id)).get();
           if (freshApp) {
             try { await queueDownload(freshApp); } catch { /* logged elsewhere */ }

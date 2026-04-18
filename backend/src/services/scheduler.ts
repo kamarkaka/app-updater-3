@@ -32,7 +32,8 @@ async function runCheckCycle() {
       console.log(`[scheduler] Checking ${app.name}...`);
       const result = await checkAppForUpdates(app);
 
-      if (result.hasUpdate && result.downloadUrls.length > 0) {
+      const canDownload = result.downloadUrls.length > 0 || (app.sourceType !== "github" && !!app.downloadSteps);
+      if (result.hasUpdate && canDownload) {
         console.log(
           `[scheduler] Update found for ${app.name}: ${app.currentVersion ?? "none"} -> ${result.version}`
         );

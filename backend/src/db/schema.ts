@@ -32,11 +32,9 @@ export const applications = sqliteTable("application", {
 
   versionSelector: text("version_selector"),
   versionPattern: text("version_pattern"),
-  downloadSelector: text("download_selector"),
-  downloadPattern: text("download_pattern"),
   assetPattern: text("asset_pattern"),
-  maxNavigationDepth: integer("max_navigation_depth").default(5),
-  downloadTimeout: integer("download_timeout").default(60),
+  downloadUrl: text("download_url"),
+  downloadSteps: text("download_steps"),
 
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
