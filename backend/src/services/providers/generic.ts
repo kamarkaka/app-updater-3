@@ -199,8 +199,12 @@ function extractDownloadLinks($: cheerio.CheerioAPI, baseUrl: string, selector?:
   // even without a file extension). These are entry points for pages like
   // SourceForge where the actual download is behind a countdown/redirect,
   // or Geeks3D where link text mentions the file type (e.g., "(ZIP)", "(SETUP)").
-  if (links.length === 0) {
-    const FILE_TYPE_HINTS = /\b(zip|exe|msi|setup|installer|dmg|pkg|deb|rpm|appimage|tar\.gz|7z|7zip)\b/i;
+  // Always collect these when a download_pattern is set (the pattern might
+  // target intent-based URLs like /download_thanks?target=win-x64-portable).
+  if (links.length === 0 || pattern) {
+    // Match file type keywords when preceded by a dot (.zip, .exe) or in parens (ZIP).
+    // Excludes bare words like "MSI" (company name) from matching ".msi" (file type).
+    const FILE_TYPE_HINTS = /[.(](zip|exe|msi|dmg|pkg|deb|rpm|appimage|7z|7zip)\b|\b(setup|installer|tar\.gz|tar\.xz)\b/i;
     const fileTypeLinks: string[] = [];
     const downloadTextLinks: string[] = [];
 
@@ -226,8 +230,13 @@ function extractDownloadLinks($: cheerio.CheerioAPI, baseUrl: string, selector?:
       } catch { /* skip */ }
     });
 
-    // Prefer file-type links, fall back to download-text links
-    links.push(...(fileTypeLinks.length > 0 ? fileTypeLinks : downloadTextLinks));
+    // When a pattern is set, include all candidates so the pattern can select the right one.
+    // Otherwise prefer file-type links, fall back to download-text links.
+    if (pattern) {
+      links.push(...fileTypeLinks, ...downloadTextLinks);
+    } else {
+      links.push(...(fileTypeLinks.length > 0 ? fileTypeLinks : downloadTextLinks));
+    }
   }
 
   if (pattern) {
@@ -432,7 +441,7 @@ export const genericProvider: VersionProvider = {
         throw new Error("No version found on page");
       }
 
-      const version = versionCandidates[0].version;
+      let version = versionCandidates[0].version;
 
       // Step 2: Extract download links from initial page
       let downloadUrls = extractDownloadLinks(
@@ -442,10 +451,25 @@ export const genericProvider: VersionProvider = {
         app.downloadPattern
       );
 
-      // Filter to links matching the detected version (URL contains version string)
+      // Cross-check: if download URLs contain a consistent version that differs
+      // from the heuristic-detected version, trust the download URLs.
+      // Download URLs are the most reliable signal (they're what actually gets served).
       if (downloadUrls.length > 0) {
         const versionInUrl = downloadUrls.filter((u) => u.includes(version));
-        if (versionInUrl.length > 0) downloadUrls = versionInUrl;
+        if (versionInUrl.length > 0) {
+          downloadUrls = versionInUrl;
+        } else {
+          // Detected version not in any URL — extract version from URLs instead
+          const urlVersionRegex = new RegExp(VERSION_REGEX.source, "gi");
+          for (const candidate of versionCandidates) {
+            const v = candidate.version;
+            if (downloadUrls.some((u) => u.includes(v))) {
+              version = v;
+              downloadUrls = downloadUrls.filter((u) => u.includes(v));
+              break;
+            }
+          }
+        }
       }
 
       // Filter by asset pattern
