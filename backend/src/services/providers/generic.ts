@@ -281,14 +281,20 @@ export const genericProvider: VersionProvider = {
   },
 };
 
+export interface DownloadResolution {
+  url: string;
+  headers: Record<string, string>;
+}
+
 /**
  * Follow user-defined download steps to resolve a download URL.
  * Each step clicks a matching element; CDP Fetch intercepts binary responses.
+ * Returns the resolved URL plus session cookies/referer needed to fetch it.
  */
 export async function resolveDownloadWithSteps(
   appUrl: string,
   steps: DownloadStep[]
-): Promise<string> {
+): Promise<DownloadResolution> {
   const browser = await getBrowser();
   const page = await browser.newPage();
   incrementPageCount();
@@ -352,39 +358,42 @@ export async function resolveDownloadWithSteps(
         if (resolvedUrl) break;
 
         const step = steps[i];
-        let clicked = false;
 
-        // Try CSS selector first
-        if (step.selector) {
-          try {
-            await page.waitForSelector(step.selector, { timeout: 10000 });
-            await page.click(step.selector);
-            clicked = true;
-          } catch { /* selector not found or not clickable */ }
-        }
+        const clicked = await page.evaluate(
+          (sel: string | null, textPat: string | null, urlPat: string | null) => {
+            const candidates = sel
+              ? document.querySelectorAll(sel)
+              : document.querySelectorAll("a, button, input[type=submit], [role=button]");
 
-        // Fall back to (or combine with) text pattern matching
-        if (!clicked && step.textPattern) {
-          const pattern = step.textPattern;
-          clicked = await page.evaluate((pat: string) => {
-            const regex = new RegExp(pat, "i");
-            const candidates = document.querySelectorAll("a, button, input[type=submit], [role=button]");
+            const textRegex = textPat ? new RegExp(textPat, "i") : null;
+            const urlRegex = urlPat ? new RegExp(urlPat, "i") : null;
+
             for (const el of candidates) {
-              const text = (el.textContent || "").trim();
-              if (regex.test(text)) {
-                (el as HTMLElement).click();
-                return true;
+              if (textRegex) {
+                const text = (el.textContent || "").trim();
+                if (!textRegex.test(text)) continue;
               }
+              if (urlRegex) {
+                const href = el.getAttribute("href") || "";
+                if (!urlRegex.test(href)) continue;
+              }
+              // If only selector was given with no text/url filter, click first match
+              (el as HTMLElement).click();
+              return true;
             }
             return false;
-          }, pattern);
-        }
+          },
+          step.selector || null,
+          step.textPattern || null,
+          step.urlPattern || null
+        );
 
         if (!clicked) {
           throw new Error(
             `Download step ${i + 1} did not match any element. ` +
             `Selector: ${step.selector || "(none)"}, ` +
-            `Text pattern: ${step.textPattern || "(none)"}`
+            `Text: ${step.textPattern || "(none)"}, ` +
+            `URL: ${step.urlPattern || "(none)"}`
           );
         }
 
@@ -410,7 +419,17 @@ export async function resolveDownloadWithSteps(
       throw new Error("Download steps completed but no download was triggered.");
     }
 
-    return resolvedUrl;
+    // Capture session cookies and referer for the download URL
+    const cookies = await page.cookies(resolvedUrl);
+    const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+
+    return {
+      url: resolvedUrl,
+      headers: {
+        ...(cookieHeader && { Cookie: cookieHeader }),
+        Referer: page.url(),
+      },
+    };
   } finally {
     await page.close();
   }

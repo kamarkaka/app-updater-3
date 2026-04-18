@@ -122,9 +122,12 @@ async function startDownload(downloadId: number) {
       .get();
 
     // For generic sources, resolve download URL using user-defined steps
+    let sessionHeaders: Record<string, string> = {};
     if (app && app.sourceType === "generic" && (app.downloadSteps || app.downloadUrl)) {
       const steps: DownloadStep[] = app.downloadSteps ? JSON.parse(app.downloadSteps) : [];
-      downloadUrl = await resolveDownloadWithSteps(app.downloadUrl || app.url, steps);
+      const resolution = await resolveDownloadWithSteps(app.downloadUrl || app.url, steps);
+      downloadUrl = resolution.url;
+      sessionHeaders = resolution.headers;
       db.update(downloads)
         .set({ url: downloadUrl })
         .where(eq(downloads.id, downloadId))
@@ -144,6 +147,7 @@ async function startDownload(downloadId: number) {
 
     const headers: Record<string, string> = {
       "User-Agent": "app-updater/1.0",
+      ...sessionHeaders,
     };
 
     if (downloadedBytes > 0) {
