@@ -1,9 +1,6 @@
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
 import * as cheerio from "cheerio";
 import type { Element } from "domhandler";
-import type { Page, HTTPResponse, CDPSession } from "puppeteer";
+import type { Page, CDPSession } from "puppeteer";
 import { Application } from "../../db/schema.js";
 import { getBrowser, incrementPageCount } from "../browserManager.js";
 import { VersionProvider, VersionResult } from "./types.js";
@@ -327,21 +324,31 @@ async function resolveDownloadUrl(
   const timeout = (app.downloadTimeout ?? 60) * 1000;
   const startTime = Date.now();
 
-  // Redirect Chromium downloads to a temp dir so they don't leak elsewhere.
-  // We only need the URL — files here are cleaned up after interception.
-  const tmpDownloadDir = fs.mkdtempSync(path.join(os.tmpdir(), "app-updater-intercept-"));
+  // We only need the download URL, not the file. Use CDP Fetch domain
+  // to intercept responses at the network level — when we detect a binary
+  // download, capture the URL and fail the request so Chromium never
+  // receives the body and can't save it anywhere.
   const cdp: CDPSession = await page.createCDPSession();
-  await cdp.send("Browser.setDownloadBehavior" as any, {
-    behavior: "allowAndName",
-    downloadPath: tmpDownloadDir,
-    eventsEnabled: true,
+  // Only intercept Document (navigation) responses — skips CSS, JS, images
+  await cdp.send("Fetch.enable" as any, {
+    patterns: [{ requestStage: "Response", resourceType: "Document" }],
   });
 
   let resolvedUrl: string | null = null;
 
-  // Listen for download events via response headers
-  const responseHandler = (response: HTTPResponse) => {
-    const headers = response.headers();
+  cdp.on("Fetch.requestPaused" as any, async (event: any) => {
+    if (resolvedUrl) {
+      await cdp.send("Fetch.continueRequest" as any, {
+        requestId: event.requestId,
+      }).catch(() => {});
+      return;
+    }
+
+    const headers: Record<string, string> = {};
+    for (const h of event.responseHeaders || []) {
+      headers[h.name.toLowerCase()] = h.value;
+    }
+
     const contentDisposition = headers["content-disposition"] || "";
     const contentType = headers["content-type"] || "";
 
@@ -354,14 +361,16 @@ async function resolveDownloadUrl(
         !contentType.includes("xml"));
 
     if (isBinary) {
-      resolvedUrl = response.url();
+      resolvedUrl = event.request.url;
+      await cdp.send("Fetch.failRequest" as any, {
+        requestId: event.requestId,
+        reason: "Aborted",
+      }).catch(() => {});
+    } else {
+      await cdp.send("Fetch.continueRequest" as any, {
+        requestId: event.requestId,
+      }).catch(() => {});
     }
-  };
-  page.on("response", responseHandler);
-
-  // Also listen for CDP download events
-  cdp.on("Browser.downloadWillBegin" as any, (event: any) => {
-    resolvedUrl = event.url;
   });
 
   try {
@@ -517,10 +526,8 @@ async function resolveDownloadUrl(
       }
     }
   } finally {
-    page.off("response", responseHandler);
+    await cdp.send("Fetch.disable" as any).catch(() => {});
     await cdp.detach();
-    // Clean up any files Chromium saved to the temp dir
-    fs.rmSync(tmpDownloadDir, { recursive: true, force: true });
   }
 
   if (!resolvedUrl) {
@@ -620,6 +627,12 @@ export async function resolveGenericDownloadUrl(
   url: string,
   app: Application
 ): Promise<string> {
+  // If URL already points to a downloadable file, no resolution needed
+  try {
+    const urlPath = new URL(url).pathname;
+    if (DOWNLOAD_EXTENSIONS.test(urlPath)) return url;
+  } catch { /* invalid URL, proceed with resolution */ }
+
   const browser = await getBrowser();
   const page = await browser.newPage();
   incrementPageCount();

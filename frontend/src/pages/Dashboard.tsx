@@ -74,11 +74,10 @@ export default function Dashboard() {
     );
   }
 
+  const ATTENTION_STATUSES = ["error", "update-available", "new"];
+
   function needsAttention(app: Application): boolean {
-    if (app.status === "error") return true;
-    if (app.latestVersion && app.currentVersion !== app.latestVersion) return true;
-    if (!app.lastCheckedAt) return true;
-    return false;
+    return ATTENTION_STATUSES.includes(getAppStatus(app));
   }
 
   const attention = apps.filter(needsAttention);

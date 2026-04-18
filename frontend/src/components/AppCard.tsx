@@ -6,6 +6,7 @@ import StatusBadge from "./StatusBadge";
 export function getAppStatus(app: Application): string {
   if (app.status === "error") return "error";
   if (app.status === "paused") return "paused";
+  if (!app.lastCheckedAt) return "new";
   if (app.latestVersion && app.currentVersion !== app.latestVersion)
     return "update-available";
   return "up-to-date";
