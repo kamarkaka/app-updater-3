@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import type { Application } from "../types";
 import StatusBadge from "./StatusBadge";
 
-function getAppStatus(app: Application): string {
+export function getAppStatus(app: Application): string {
   if (app.status === "error") return "error";
   if (app.status === "paused") return "paused";
   if (app.latestVersion && app.currentVersion !== app.latestVersion)
@@ -10,7 +10,7 @@ function getAppStatus(app: Application): string {
   return "up-to-date";
 }
 
-function timeAgo(dateStr: string | null): string {
+export function timeAgo(dateStr: string | null): string {
   if (!dateStr) return "never";
   const diff = Date.now() - new Date(dateStr).getTime();
   const minutes = Math.floor(diff / 60000);

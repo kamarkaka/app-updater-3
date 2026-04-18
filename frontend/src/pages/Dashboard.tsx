@@ -2,11 +2,23 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { Application } from "../types";
-import AppCard from "../components/AppCard";
+import AppCard, { getAppStatus, timeAgo } from "../components/AppCard";
+import StatusBadge from "../components/StatusBadge";
+
+type ViewMode = "grid" | "list";
+const VIEW_STORAGE_KEY = "app-updater-view";
 
 export default function Dashboard() {
   const [apps, setApps] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<ViewMode>(
+    () => (localStorage.getItem(VIEW_STORAGE_KEY) as ViewMode) || "grid"
+  );
+
+  function switchView(mode: ViewMode) {
+    setViewMode(mode);
+    localStorage.setItem(VIEW_STORAGE_KEY, mode);
+  }
 
   async function loadApps() {
     try {
@@ -50,19 +62,112 @@ export default function Dashboard() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-xl font-semibold text-white">Applications</h1>
-        <Link
-          to="/apps/new"
-          className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-500"
-        >
-          Add App
-        </Link>
+        <div className="flex items-center gap-3">
+          <div className="flex rounded border border-gray-700 overflow-hidden">
+            <button
+              onClick={() => switchView("grid")}
+              className={`px-2.5 py-1.5 text-sm ${
+                viewMode === "grid"
+                  ? "bg-gray-700 text-white"
+                  : "bg-gray-900 text-gray-400 hover:text-gray-300"
+              }`}
+              title="Grid view"
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 16 16">
+                <path d="M1 2.5A1.5 1.5 0 012.5 1h3A1.5 1.5 0 017 2.5v3A1.5 1.5 0 015.5 7h-3A1.5 1.5 0 011 5.5v-3zm8 0A1.5 1.5 0 0110.5 1h3A1.5 1.5 0 0115 2.5v3A1.5 1.5 0 0113.5 7h-3A1.5 1.5 0 019 5.5v-3zm-8 8A1.5 1.5 0 012.5 9h3A1.5 1.5 0 017 10.5v3A1.5 1.5 0 015.5 15h-3A1.5 1.5 0 011 13.5v-3zm8 0A1.5 1.5 0 0110.5 9h3a1.5 1.5 0 011.5 1.5v3a1.5 1.5 0 01-1.5 1.5h-3A1.5 1.5 0 019 13.5v-3z" />
+              </svg>
+            </button>
+            <button
+              onClick={() => switchView("list")}
+              className={`px-2.5 py-1.5 text-sm ${
+                viewMode === "list"
+                  ? "bg-gray-700 text-white"
+                  : "bg-gray-900 text-gray-400 hover:text-gray-300"
+              }`}
+              title="List view"
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 16 16">
+                <path fillRule="evenodd" d="M2.5 12a.5.5 0 01.5-.5h10a.5.5 0 010 1H3a.5.5 0 01-.5-.5zm0-4a.5.5 0 01.5-.5h10a.5.5 0 010 1H3a.5.5 0 01-.5-.5zm0-4a.5.5 0 01.5-.5h10a.5.5 0 010 1H3a.5.5 0 01-.5-.5z" />
+              </svg>
+            </button>
+          </div>
+          <Link
+            to="/apps/new"
+            className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-500"
+          >
+            Add App
+          </Link>
+        </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {apps.map((app) => (
-          <AppCard key={app.id} app={app} />
-        ))}
-      </div>
+      {viewMode === "grid" ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {apps.map((app) => (
+            <AppCard key={app.id} app={app} />
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-gray-800 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-800 bg-gray-900/50 text-gray-400 text-xs uppercase tracking-wider">
+                <th className="text-left px-4 py-3 font-medium">Name</th>
+                <th className="text-left px-4 py-3 font-medium">Status</th>
+                <th className="text-left px-4 py-3 font-medium">Current</th>
+                <th className="text-left px-4 py-3 font-medium">Latest</th>
+                <th className="text-left px-4 py-3 font-medium">Checked</th>
+                <th className="text-left px-4 py-3 font-medium">URL</th>
+              </tr>
+            </thead>
+            <tbody>
+              {apps.map((app) => {
+                const status = getAppStatus(app);
+                return (
+                  <tr
+                    key={app.id}
+                    className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors"
+                  >
+                    <td className="px-4 py-3">
+                      <Link
+                        to={`/apps/${app.id}`}
+                        className="text-white font-medium hover:text-blue-400"
+                      >
+                        {app.name}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3">
+                      <StatusBadge status={status} />
+                    </td>
+                    <td className="px-4 py-3 text-gray-300 font-mono">
+                      {app.currentVersion || "—"}
+                    </td>
+                    <td className="px-4 py-3 font-mono">
+                      {app.latestVersion && app.latestVersion !== app.currentVersion ? (
+                        <span className="text-blue-400">{app.latestVersion}</span>
+                      ) : (
+                        <span className="text-gray-500">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-gray-400">
+                      {timeAgo(app.lastCheckedAt)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <a
+                        href={app.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-gray-500 hover:text-blue-400 truncate block max-w-[200px]"
+                      >
+                        {app.url}
+                      </a>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
