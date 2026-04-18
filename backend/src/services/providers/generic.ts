@@ -215,8 +215,10 @@ function extractDownloadLinks($: cheerio.CheerioAPI, baseUrl: string, selector?:
 
       try {
         const fullUrl = new URL(href, baseUrl).href;
-        // Skip links pointing back to the current page
+        // Skip links pointing to the current page or parent paths
         if (fullUrl === baseUrl || fullUrl === baseUrl + "/") return;
+        const baseWithoutTrailing = baseUrl.replace(/\/$/, "");
+        if (baseWithoutTrailing.startsWith(fullUrl.replace(/\/$/, ""))) return;
 
         if (FILE_TYPE_HINTS.test(text)) {
           fileTypeLinks.push(fullUrl);
@@ -308,27 +310,41 @@ async function resolveDownloadUrl(
         if (resolvedUrl) return null;
         if (attempt > 0) await new Promise((r) => setTimeout(r, 1000));
 
-        const result = await page.evaluate(() => {
+        const appName = app.name.toLowerCase();
+        const result = await page.evaluate((appNameLower: string) => {
           const links = document.querySelectorAll("a[href]");
+          let fallback: string | null = null;
+
           for (const link of links) {
             const href = link.getAttribute("href") || "";
             const text = (link.textContent || "").trim().toLowerCase();
 
-            // Skip empty and anchor-only links
             if (!href || href === "#" || href.startsWith("javascript:")) continue;
 
             // Match links with download file extensions
             if (/\.(zip|exe|msi|dmg|pkg|deb|rpm|appimage|tar\.gz|tar\.xz|7z|rar)\b/i.test(href)) {
-              return href;
+              // Prefer links containing the app name
+              if (href.toLowerCase().includes(appNameLower) || text.includes(appNameLower)) {
+                return href;
+              }
+              if (!fallback) fallback = href;
+              continue;
             }
 
-            // Match links whose text is primarily "download" (not nav links like "Downloads page")
+            // Match links whose text is primarily "download"
             if (/^(\W*download\W*(\(.*\))?\s*)$/i.test(text) || /^download\s*$/i.test(text.split("\n")[0])) {
-              return href;
+              if (!fallback) fallback = href;
             }
           }
-          return null;
-        });
+          // If we only have a fallback (no app-name match), check if the page
+          // has form submit buttons. If it does, return null so the click-through
+          // loop can handle form-based downloads (e.g., TechPowerUp mirror pages).
+          if (fallback) {
+            const hasFormButtons = document.querySelector('button[type="submit"], input[type="submit"]');
+            if (hasFormButtons) return null;
+          }
+          return fallback;
+        }, appName);
 
         if (result) {
           try { return new URL(result, pageUrl).href; } catch { /* skip */ }
@@ -360,19 +376,55 @@ async function resolveDownloadUrl(
           } catch { /* selector not found */ }
         }
 
+        // Try form submit buttons first — they're a stronger signal than <a> tags
+        // on pages with mixed content (e.g., TechPowerUp has GPU-Z form button + NVIDIA sidebar links)
         if (!clicked) {
+          try {
+            const appNameLower = app.name.toLowerCase();
+            const submitBtns = await page.$$('button[type="submit"], input[type="submit"]');
+            // Prefer submit buttons whose text contains the app name
+            let fallbackBtn = null;
+            for (const btn of submitBtns) {
+              const btnText = await btn.evaluate((node) =>
+                (node.textContent || "").trim().toLowerCase()
+              );
+              if (btnText.includes(appNameLower)) {
+                await btn.click();
+                clicked = true;
+                break;
+              }
+              if (!fallbackBtn) fallbackBtn = btn;
+            }
+            if (!clicked && fallbackBtn) {
+              await fallbackBtn.click();
+              clicked = true;
+            }
+          } catch { /* no submit buttons */ }
+        }
+
+        // Then try <a> links with download text, preferring ones matching app name
+        if (!clicked) {
+          const appNameLower = app.name.toLowerCase();
           for (const text of DOWNLOAD_BUTTON_TEXTS) {
             try {
-              const elements = await page.$$(`a, button, input[type="submit"]`);
+              const elements = await page.$$("a");
+              let fallbackEl = null;
               for (const el of elements) {
                 const elText = await el.evaluate((node) =>
                   (node.textContent || "").trim().toLowerCase()
                 );
                 if (elText.includes(text)) {
-                  await el.click();
-                  clicked = true;
-                  break;
+                  if (elText.includes(appNameLower)) {
+                    await el.click();
+                    clicked = true;
+                    break;
+                  }
+                  if (!fallbackEl) fallbackEl = el;
                 }
+              }
+              if (!clicked && fallbackEl) {
+                await fallbackEl.click();
+                clicked = true;
               }
               if (clicked) break;
             } catch { /* continue */ }
@@ -477,6 +529,13 @@ export const genericProvider: VersionProvider = {
         const regex = new RegExp(app.assetPattern, "i");
         const filtered = downloadUrls.filter((u) => regex.test(u));
         if (filtered.length > 0) downloadUrls = filtered;
+      }
+
+      // Fallback: if no download URLs found, use the app page URL itself.
+      // resolveGenericDownloadUrl can navigate to it and click through
+      // download forms/buttons that aren't simple <a> links.
+      if (downloadUrls.length === 0) {
+        downloadUrls = [app.url];
       }
 
       return { version, downloadUrls };
