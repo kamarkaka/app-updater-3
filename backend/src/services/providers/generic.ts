@@ -303,8 +303,16 @@ export async function resolveDownloadWithSteps(
     await page.setUserAgent(DEFAULT_USER_AGENT);
 
     const cdp: CDPSession = await page.createCDPSession();
+
+    // Intercept Document responses to catch navigation-based downloads
     await cdp.send("Fetch.enable" as any, {
       patterns: [{ requestStage: "Response", resourceType: "Document" }],
+    });
+
+    // Catch JS-initiated downloads (XHR→redirect, blob URLs, <a download>, etc.)
+    await cdp.send("Browser.setDownloadBehavior" as any, {
+      behavior: "deny",
+      eventsEnabled: true,
     });
 
     let resolvedUrl: string | null = null;
@@ -346,6 +354,12 @@ export async function resolveDownloadWithSteps(
       }
     });
 
+    cdp.on("Browser.downloadWillBegin" as any, (event: any) => {
+      if (!resolvedUrl) {
+        resolvedUrl = event.url;
+      }
+    });
+
     try {
       await page.goto(appUrl, { waitUntil: "networkidle2", timeout: 30000 });
 
@@ -359,38 +373,44 @@ export async function resolveDownloadWithSteps(
 
         const step = steps[i];
 
-        const clicked = await page.evaluate(
-          (sel: string | null, textPat: string | null, urlPat: string | null) => {
-            const candidates = sel
-              ? document.querySelectorAll(sel)
-              : document.querySelectorAll("a, button, input[type=submit], [role=button]");
+        let clicked = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (attempt > 0) await new Promise((r) => setTimeout(r, 5000));
 
-            const textRegex = textPat ? new RegExp(textPat, "i") : null;
-            const urlRegex = urlPat ? new RegExp(urlPat, "i") : null;
+          clicked = await page.evaluate(
+            (sel: string | null, textPat: string | null, urlPat: string | null) => {
+              const candidates = sel
+                ? document.querySelectorAll(sel)
+                : document.querySelectorAll("a, button, input[type=submit], [role=button]");
 
-            for (const el of candidates) {
-              if (textRegex) {
-                const text = (el.textContent || "").trim();
-                if (!textRegex.test(text)) continue;
+              const textRegex = textPat ? new RegExp(textPat, "i") : null;
+              const urlRegex = urlPat ? new RegExp(urlPat, "i") : null;
+
+              for (const el of candidates) {
+                if (textRegex) {
+                  const text = (el.textContent || "").trim();
+                  if (!textRegex.test(text)) continue;
+                }
+                if (urlRegex) {
+                  const href = el.getAttribute("href") || "";
+                  if (!urlRegex.test(href)) continue;
+                }
+                (el as HTMLElement).click();
+                return true;
               }
-              if (urlRegex) {
-                const href = el.getAttribute("href") || "";
-                if (!urlRegex.test(href)) continue;
-              }
-              // If only selector was given with no text/url filter, click first match
-              (el as HTMLElement).click();
-              return true;
-            }
-            return false;
-          },
-          step.selector || null,
-          step.textPattern || null,
-          step.urlPattern || null
-        );
+              return false;
+            },
+            step.selector || null,
+            step.textPattern || null,
+            step.urlPattern || null
+          );
+
+          if (clicked) break;
+        }
 
         if (!clicked) {
           throw new Error(
-            `Download step ${i + 1} did not match any element. ` +
+            `Download step ${i + 1} did not match any element after 3 attempts. ` +
             `Selector: ${step.selector || "(none)"}, ` +
             `Text: ${step.textPattern || "(none)"}, ` +
             `URL: ${step.urlPattern || "(none)"}`
@@ -402,11 +422,11 @@ export async function resolveDownloadWithSteps(
           try {
             await page.waitForNavigation({ timeout: 15000, waitUntil: "networkidle2" });
           } catch {
-            // Navigation might not happen (e.g., JS-triggered download)
-            // Wait briefly for CDP to catch the download
-            if (!resolvedUrl) {
-              await new Promise((r) => setTimeout(r, 3000));
-            }
+            // Navigation might not happen (e.g., XHR-triggered download)
+          }
+          // Wait for JS-initiated downloads (XHR → token → redirect)
+          if (!resolvedUrl) {
+            await new Promise((r) => setTimeout(r, 5000));
           }
         }
       }
