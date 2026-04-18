@@ -66,6 +66,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ url }),
     }),
+  checkAll: () =>
+    request<{ checked: number }>("/api/apps/check-all", { method: "POST" }),
   checkApp: (id: number) =>
     request<CheckResult>(`/api/apps/${id}/check`, { method: "POST" }),
   downloadApp: (id: number) =>

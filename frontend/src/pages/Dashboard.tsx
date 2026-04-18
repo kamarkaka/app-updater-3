@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { Application } from "../types";
 import AppCard, { getAppStatus, timeAgo } from "../components/AppCard";
+import SourceIcon from "../components/SourceIcon";
 import StatusBadge from "../components/StatusBadge";
+import { HiOutlineArrowPath } from "react-icons/hi2";
 
 type ViewMode = "grid" | "list";
 const VIEW_STORAGE_KEY = "app-updater-view";
@@ -14,6 +16,20 @@ export default function Dashboard() {
   const [viewMode, setViewMode] = useState<ViewMode>(
     () => (localStorage.getItem(VIEW_STORAGE_KEY) as ViewMode) || "grid"
   );
+
+  const [checkingAll, setCheckingAll] = useState(false);
+
+  async function handleCheckAll() {
+    setCheckingAll(true);
+    try {
+      await api.checkAll();
+      await loadApps();
+    } catch {
+      // errors shown per-app via status
+    } finally {
+      setCheckingAll(false);
+    }
+  }
 
   function switchView(mode: ViewMode) {
     setViewMode(mode);
@@ -58,6 +74,105 @@ export default function Dashboard() {
     );
   }
 
+  function needsAttention(app: Application): boolean {
+    if (app.status === "error") return true;
+    if (app.latestVersion && app.currentVersion !== app.latestVersion) return true;
+    if (!app.lastCheckedAt) return true;
+    return false;
+  }
+
+  const attention = apps.filter(needsAttention);
+  const upToDate = apps.filter((app) => !needsAttention(app));
+
+  function renderGrid(items: Application[]) {
+    return (
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {items.map((app) => (
+          <AppCard key={app.id} app={app} />
+        ))}
+      </div>
+    );
+  }
+
+  function renderList(items: Application[]) {
+    return (
+      <div className="rounded-lg border border-gray-800 overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-800 bg-gray-900/50 text-gray-400 text-xs uppercase tracking-wider">
+              <th className="text-left px-4 py-3 font-medium">Name</th>
+              <th className="text-left px-4 py-3 font-medium">Status</th>
+              <th className="text-left px-4 py-3 font-medium">Current</th>
+              <th className="text-left px-4 py-3 font-medium">Latest</th>
+              <th className="text-left px-4 py-3 font-medium">Checked</th>
+              <th className="text-left px-4 py-3 font-medium">URL</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((app) => {
+              const status = getAppStatus(app);
+              return (
+                <tr
+                  key={app.id}
+                  className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors"
+                >
+                  <td className="px-4 py-3">
+                    <Link
+                      to={`/apps/${app.id}`}
+                      className="text-white font-medium hover:text-blue-400 inline-flex items-center gap-1.5"
+                    >
+                      <SourceIcon sourceType={app.sourceType} />
+                      {app.name}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={status} />
+                  </td>
+                  <td className="px-4 py-3 text-gray-300 font-mono">
+                    {app.currentVersion || "—"}
+                  </td>
+                  <td className="px-4 py-3 font-mono">
+                    {app.latestVersion && app.latestVersion !== app.currentVersion ? (
+                      <span className="text-blue-400">{app.latestVersion}</span>
+                    ) : (
+                      <span className="text-gray-500">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-gray-400">
+                    {timeAgo(app.lastCheckedAt)}
+                  </td>
+                  <td className="px-4 py-3">
+                    <a
+                      href={app.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-gray-500 hover:text-blue-400 truncate block max-w-[200px]"
+                    >
+                      {app.url}
+                    </a>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  function renderSection(title: string, items: Application[]) {
+    if (items.length === 0) return null;
+    return (
+      <section className="mb-8">
+        <h2 className="text-sm font-medium text-gray-400 mb-3">
+          {title}
+          <span className="ml-2 text-gray-600">{items.length}</span>
+        </h2>
+        {viewMode === "grid" ? renderGrid(items) : renderList(items)}
+      </section>
+    );
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -91,6 +206,15 @@ export default function Dashboard() {
               </svg>
             </button>
           </div>
+          <button
+            onClick={handleCheckAll}
+            disabled={checkingAll}
+            className="px-3 py-1.5 rounded bg-gray-800 text-gray-300 text-sm hover:bg-gray-700 disabled:opacity-50 inline-flex items-center gap-1.5"
+            title="Check all apps for updates"
+          >
+            <HiOutlineArrowPath className={`w-4 h-4 ${checkingAll ? "animate-spin" : ""}`} />
+            Check All
+          </button>
           <Link
             to="/apps/new"
             className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-500"
@@ -100,74 +224,8 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {viewMode === "grid" ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {apps.map((app) => (
-            <AppCard key={app.id} app={app} />
-          ))}
-        </div>
-      ) : (
-        <div className="rounded-lg border border-gray-800 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-800 bg-gray-900/50 text-gray-400 text-xs uppercase tracking-wider">
-                <th className="text-left px-4 py-3 font-medium">Name</th>
-                <th className="text-left px-4 py-3 font-medium">Status</th>
-                <th className="text-left px-4 py-3 font-medium">Current</th>
-                <th className="text-left px-4 py-3 font-medium">Latest</th>
-                <th className="text-left px-4 py-3 font-medium">Checked</th>
-                <th className="text-left px-4 py-3 font-medium">URL</th>
-              </tr>
-            </thead>
-            <tbody>
-              {apps.map((app) => {
-                const status = getAppStatus(app);
-                return (
-                  <tr
-                    key={app.id}
-                    className="border-b border-gray-800/50 hover:bg-gray-800/30 transition-colors"
-                  >
-                    <td className="px-4 py-3">
-                      <Link
-                        to={`/apps/${app.id}`}
-                        className="text-white font-medium hover:text-blue-400"
-                      >
-                        {app.name}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={status} />
-                    </td>
-                    <td className="px-4 py-3 text-gray-300 font-mono">
-                      {app.currentVersion || "—"}
-                    </td>
-                    <td className="px-4 py-3 font-mono">
-                      {app.latestVersion && app.latestVersion !== app.currentVersion ? (
-                        <span className="text-blue-400">{app.latestVersion}</span>
-                      ) : (
-                        <span className="text-gray-500">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-gray-400">
-                      {timeAgo(app.lastCheckedAt)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <a
-                        href={app.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-gray-500 hover:text-blue-400 truncate block max-w-[200px]"
-                      >
-                        {app.url}
-                      </a>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {renderSection("Needs Attention", attention)}
+      {renderSection("Up to Date", upToDate)}
     </div>
   );
 }

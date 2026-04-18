@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import type { Application } from "../types";
+import SourceIcon from "./SourceIcon";
 import StatusBadge from "./StatusBadge";
 
 export function getAppStatus(app: Application): string {
@@ -31,7 +32,10 @@ export default function AppCard({ app }: { app: Application }) {
       className="block rounded-lg border border-gray-800 bg-gray-900 p-4 hover:border-gray-700 transition-colors"
     >
       <div className="flex items-start justify-between mb-3">
-        <h3 className="font-medium text-white mr-2">{app.name}</h3>
+        <h3 className="font-medium text-white mr-2 flex items-center gap-1.5">
+          <SourceIcon sourceType={app.sourceType} />
+          {app.name}
+        </h3>
         <StatusBadge status={displayStatus} />
       </div>
 

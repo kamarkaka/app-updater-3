@@ -43,6 +43,11 @@ export default function Downloads() {
     load();
   }
 
+  async function handleRemove(id: number) {
+    await api.cancelDownload(id);
+    load();
+  }
+
   if (loading) return <p className="text-gray-400">Loading...</p>;
 
   return (
@@ -56,14 +61,23 @@ export default function Downloads() {
           {downloads.map((dl) => (
             <div
               key={dl.id}
-              className="rounded border border-gray-800 bg-gray-900 p-4"
+              className="rounded border border-gray-800 bg-gray-900 p-4 relative group"
             >
+              <button
+                onClick={() => handleRemove(dl.id)}
+                className="absolute top-2 right-2 p-1 rounded text-gray-600 hover:text-red-400 hover:bg-gray-800 opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Remove download"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
                   <span className="text-white font-medium">{dl.fileName}</span>
                   <StatusBadge status={dl.status} />
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 mr-6">
                   {dl.totalBytes && (
                     <span className="text-xs text-gray-500">
                       {formatBytes(dl.totalBytes)}

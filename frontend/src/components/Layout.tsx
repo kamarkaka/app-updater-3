@@ -39,7 +39,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             ))}
             <button
               onClick={handleLogout}
-              className="ml-4 px-3 py-1.5 rounded text-sm text-gray-400 hover:text-white hover:bg-gray-800"
+              className="ml-4 px-3 py-1.5 rounded text-sm text-white bg-red-600 hover:bg-red-500"
             >
               Logout
             </button>

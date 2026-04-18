@@ -6,7 +6,7 @@ import { applications, downloads } from "../db/schema.js";
 import { appConfig } from "../config.js";
 import { classifySource } from "../services/providers/classifier.js";
 import { checkAppForUpdates, clearLatestResult } from "../services/versionChecker.js";
-import { queueDownload } from "../services/downloadManager.js";
+import { queueDownload, getActiveDownloadCount } from "../services/downloadManager.js";
 import { suggestVersionsForUrl } from "../services/providers/generic.js";
 
 const createAppSchema = z.object({
@@ -119,6 +119,30 @@ export default async function appRoutes(fastify: FastifyInstance) {
     db.delete(applications).where(eq(applications.id, id)).run();
     clearLatestResult(id);
     return { ok: true };
+  });
+
+  // Check all active apps and auto-download updates
+  fastify.post("/api/apps/check-all", async () => {
+    const allApps = db.select().from(applications).where(eq(applications.status, "active")).all();
+    const results: { id: number; name: string; version?: string; hasUpdate?: boolean; error?: string }[] = [];
+
+    for (const app of allApps) {
+      try {
+        const result = await checkAppForUpdates(app);
+        results.push({ id: app.id, name: app.name, version: result.version, hasUpdate: result.hasUpdate });
+
+        if (result.hasUpdate && result.downloadUrls.length > 0 && getActiveDownloadCount() < appConfig.maxConcurrentDownloads) {
+          const freshApp = db.select().from(applications).where(eq(applications.id, app.id)).get();
+          if (freshApp) {
+            try { await queueDownload(freshApp); } catch { /* logged elsewhere */ }
+          }
+        }
+      } catch (err: any) {
+        results.push({ id: app.id, name: app.name, error: err.message });
+      }
+    }
+
+    return { checked: results.length, results };
   });
 
   // Trigger manual version check
