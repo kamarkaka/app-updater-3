@@ -48,8 +48,8 @@ export async function queueDownload(app: Application): Promise<Download> {
     if (!app.latestVersion) {
       throw new Error("No version detected yet. Run a version check first.");
     }
-    if (!app.downloadSteps) {
-      throw new Error("Download steps are required for generic sources. Edit the application to configure them.");
+    if (!app.downloadSteps && !app.downloadUrl) {
+      throw new Error("Download steps or download URL are required for generic sources. Edit the application to configure them.");
     }
     version = app.latestVersion;
     url = app.url;
@@ -122,15 +122,13 @@ async function startDownload(downloadId: number) {
       .get();
 
     // For generic sources, resolve download URL using user-defined steps
-    if (app && app.sourceType === "generic" && app.downloadSteps) {
-      const steps: DownloadStep[] = JSON.parse(app.downloadSteps);
-      if (steps.length > 0) {
-        downloadUrl = await resolveDownloadWithSteps(app.downloadUrl || app.url, steps);
-        db.update(downloads)
-          .set({ url: downloadUrl })
-          .where(eq(downloads.id, downloadId))
-          .run();
-      }
+    if (app && app.sourceType === "generic" && (app.downloadSteps || app.downloadUrl)) {
+      const steps: DownloadStep[] = app.downloadSteps ? JSON.parse(app.downloadSteps) : [];
+      downloadUrl = await resolveDownloadWithSteps(app.downloadUrl || app.url, steps);
+      db.update(downloads)
+        .set({ url: downloadUrl })
+        .where(eq(downloads.id, downloadId))
+        .run();
     }
 
     let partPath = download.filePath + ".part";

@@ -30,8 +30,8 @@ const updateAppSchema = createAppSchema.partial().extend({
   status: z.enum(["active", "paused"]).optional(),
 });
 
-function canAutoDownload(app: { sourceType: string; downloadSteps: string | null }, hasDownloadUrls: boolean): boolean {
-  return hasDownloadUrls || (app.sourceType !== "github" && !!app.downloadSteps);
+function canAutoDownload(app: { sourceType: string; downloadSteps: string | null; downloadUrl: string | null }, hasDownloadUrls: boolean): boolean {
+  return hasDownloadUrls || (app.sourceType !== "github" && (!!app.downloadSteps || !!app.downloadUrl));
 }
 
 export default async function appRoutes(fastify: FastifyInstance) {

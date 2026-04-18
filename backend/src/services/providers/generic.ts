@@ -343,6 +343,11 @@ export async function resolveDownloadWithSteps(
     try {
       await page.goto(appUrl, { waitUntil: "networkidle2", timeout: 30000 });
 
+      // Wait briefly for auto-triggered downloads (e.g., direct binary URLs)
+      if (!resolvedUrl && steps.length === 0) {
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+
       for (let i = 0; i < steps.length; i++) {
         if (resolvedUrl) break;
 

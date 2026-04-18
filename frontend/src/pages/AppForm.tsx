@@ -209,7 +209,7 @@ export default function AppForm() {
           <p className="text-sm text-gray-400 font-medium mb-1">Version Detection</p>
 
           <label className="block">
-            <span className="text-xs text-gray-400">Version CSS Selector</span>
+            <span className="text-xs text-gray-400">CSS Selector</span>
             <input
               type="text"
               value={versionSelector}
@@ -220,7 +220,7 @@ export default function AppForm() {
           </label>
 
           <label className="block">
-            <span className="text-xs text-gray-400">Version Regex</span>
+            <span className="text-xs text-gray-400">Regex</span>
             <input
               type="text"
               value={versionPattern}
