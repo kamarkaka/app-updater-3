@@ -20,7 +20,6 @@ export default function AppForm() {
   const [url, setUrl] = useState("");
   const [sourceType, setSourceType] = useState("auto");
   const [checkInterval, setCheckInterval] = useState(0);
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [versionSelector, setVersionSelector] = useState("");
   const [versionPattern, setVersionPattern] = useState("");
   const [downloadSelector, setDownloadSelector] = useState("");
@@ -51,16 +50,18 @@ export default function AppForm() {
         setDownloadSelector(app.downloadSelector ?? "");
         setDownloadPattern(app.downloadPattern ?? "");
         setAssetPattern(app.assetPattern ?? "");
-        if (
-          app.versionSelector ||
-          app.versionPattern ||
-          app.downloadSelector ||
-          app.downloadPattern ||
-          app.assetPattern
-        ) {
-          setShowAdvanced(true);
-        }
       });
+    } else {
+      setName("");
+      setUrl("");
+      setSourceType("auto");
+      setVersionSelector("");
+      setVersionPattern("");
+      setDownloadSelector("");
+      setDownloadPattern("");
+      setAssetPattern("");
+      setSuggestions([]);
+      setError("");
     }
   }, [id, isEdit]);
 
@@ -85,7 +86,6 @@ export default function AppForm() {
   function applySuggestion(s: VersionSuggestion) {
     setVersionSelector(s.selector);
     setVersionPattern(s.pattern);
-    setShowAdvanced(true);
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -106,12 +106,15 @@ export default function AppForm() {
     };
 
     try {
+      let appId: number;
       if (isEdit) {
-        await api.updateApp(parseInt(id), data);
+        const updated = await api.updateApp(parseInt(id), data);
+        appId = updated.id;
       } else {
-        await api.createApp(data);
+        const created = await api.createApp(data);
+        appId = created.id;
       }
-      navigate("/");
+      navigate(`/apps/${appId}`);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -239,19 +242,11 @@ export default function AppForm() {
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          className="text-sm text-gray-400 hover:text-white"
-        >
-          {showAdvanced ? "Hide" : "Show"} Advanced Options
-        </button>
-
-        {showAdvanced && (
-          <div className="space-y-3 border border-gray-800 rounded-lg p-4">
-            <p className="text-xs text-gray-500 mb-2">
-              CSS selectors and regex patterns for version and download detection.
-            </p>
+        <div className="space-y-3 border border-gray-800 rounded-lg p-4">
+          <p className="text-sm text-gray-400 font-medium mb-1">Advanced Options</p>
+          <p className="text-xs text-gray-500 mb-2">
+            CSS selectors and regex patterns for version and download detection.
+          </p>
 
             <label className="block">
               <span className="text-xs text-gray-400">Version CSS Selector</span>
@@ -313,8 +308,7 @@ export default function AppForm() {
                 className="mt-1 block w-full rounded bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
               />
             </label>
-          </div>
-        )}
+        </div>
 
         <div className="flex gap-3 pt-2">
           <button
