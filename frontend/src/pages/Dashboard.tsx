@@ -49,8 +49,6 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadApps();
-    const interval = setInterval(loadApps, 10000);
-    return () => clearInterval(interval);
   }, []);
 
   if (loading) {

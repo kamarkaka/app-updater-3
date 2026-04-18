@@ -22,10 +22,7 @@ export default function Downloads() {
 
   useEffect(() => {
     load();
-    const hasActive = downloads.some((d) => d.status === "downloading");
-    const interval = setInterval(load, hasActive ? 2000 : 30000);
-    return () => clearInterval(interval);
-  }, [downloads.some((d) => d.status === "downloading")]);
+  }, []);
 
   async function handlePause(id: number) {
     await api.pauseDownload(id);

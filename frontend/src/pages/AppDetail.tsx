@@ -21,8 +21,6 @@ export default function AppDetail() {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
   }, [id]);
 
   async function handleCheck() {
