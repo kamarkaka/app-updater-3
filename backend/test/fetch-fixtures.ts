@@ -24,7 +24,7 @@ const apps = [
   { name: "nginx", url: "https://nginx.org/en/download.html", expectedVersion: "1.29.8" },
   { name: "nodejs", url: "https://nodejs.org/en/download", expectedVersion: "24.15" },
   { name: "prime95", url: "https://www.mersenne.org/download/", expectedVersion: "30.19" },
-  { name: "python", url: "https://www.python.org/downloads/windows/", expectedVersion: "3.14.4", nameFilter: "Python 3" },
+  { name: "python", url: "https://www.python.org/downloads/windows/", expectedVersion: "3.14.4" },
   { name: "snappy-driver-installer", url: "https://www.glenn.delahoy.com/snappy-driver-installer-origin/", expectedVersion: "1.17.8" },
   { name: "sublime-text", url: "https://www.sublimetext.com/download", expectedVersion: "4200" },
   { name: "sumatra-pdf", url: "https://www.sumatrapdfreader.org/download-free-pdf-viewer", expectedVersion: "3.6.1" },
@@ -69,8 +69,8 @@ async function main() {
   const manifest = apps.map((a) => ({
     name: a.name,
     expectedVersion: a.expectedVersion,
-    nameFilter: (a as any).nameFilter || null,
     fixture: `${a.name}.html`,
+    url: a.url,
   }));
   fs.writeFileSync(
     path.join(FIXTURES_DIR, "manifest.json"),

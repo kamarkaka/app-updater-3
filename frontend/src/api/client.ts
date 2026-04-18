@@ -1,4 +1,4 @@
-import type { Application, AppWithDownloads, Download, CheckResult, Settings } from "../types";
+import type { Application, AppWithDownloads, Download, CheckResult, Settings, VersionSuggestion } from "../types";
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { ...options?.headers as Record<string, string> };
@@ -61,6 +61,11 @@ export const api = {
     }),
   deleteApp: (id: number) =>
     request<{ ok: boolean }>(`/api/apps/${id}`, { method: "DELETE" }),
+  suggestVersions: (url: string) =>
+    request<VersionSuggestion[]>("/api/apps/suggest", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
   checkApp: (id: number) =>
     request<CheckResult>(`/api/apps/${id}/check`, { method: "POST" }),
   downloadApp: (id: number) =>

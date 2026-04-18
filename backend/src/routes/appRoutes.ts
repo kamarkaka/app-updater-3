@@ -7,13 +7,13 @@ import { appConfig } from "../config.js";
 import { classifySource } from "../services/providers/classifier.js";
 import { checkAppForUpdates, clearLatestResult } from "../services/versionChecker.js";
 import { queueDownload } from "../services/downloadManager.js";
+import { suggestVersionsForUrl } from "../services/providers/generic.js";
 
 const createAppSchema = z.object({
   name: z.string().min(1).max(200),
   url: z.string().url(),
   sourceType: z.enum(["auto", "github", "gitlab", "generic"]).default("auto"),
   checkIntervalMinutes: z.number().int().min(1).optional(),
-  nameFilter: z.string().optional(),
   versionSelector: z.string().optional(),
   versionPattern: z.string().optional(),
   downloadSelector: z.string().optional(),
@@ -55,11 +55,24 @@ export default async function appRoutes(fastify: FastifyInstance) {
     return { ...app, downloads: appDownloads };
   });
 
+  // Suggest version candidates for a URL (runs heuristic detection)
+  fastify.post("/api/apps/suggest", async (request) => {
+    const { url } = z.object({ url: z.string().url() }).parse(request.body);
+    const suggestions = await suggestVersionsForUrl(url);
+    return suggestions;
+  });
+
   // Create app
-  fastify.post("/api/apps", async (request) => {
+  fastify.post("/api/apps", async (request, reply) => {
     const body = createAppSchema.parse(request.body);
 
     const sourceType = body.sourceType === "auto" ? classifySource(body.url) : body.sourceType;
+
+    if (sourceType !== "github" && (!body.versionSelector || !body.versionPattern)) {
+      return reply.code(400).send({
+        error: "Version selector and pattern are required for non-GitHub sources. Use POST /api/apps/suggest to discover them.",
+      });
+    }
 
     const app = db
       .insert(applications)

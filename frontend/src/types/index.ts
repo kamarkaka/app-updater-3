@@ -9,7 +9,6 @@ export interface Application {
   checkIntervalMinutes: number | null;
   status: string;
   errorMessage: string | null;
-  nameFilter: string | null;
   versionSelector: string | null;
   versionPattern: string | null;
   downloadSelector: string | null;
@@ -48,6 +47,14 @@ export interface CheckResult {
   hasUpdate: boolean;
   downloadUrls: string[];
   changelog?: string;
+}
+
+export interface VersionSuggestion {
+  version: string;
+  score: number;
+  selector: string;
+  pattern: string;
+  context: string;
 }
 
 export interface Settings {

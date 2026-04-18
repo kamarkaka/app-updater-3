@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import type { FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { Application } from "../types";
+import type { Application, VersionSuggestion } from "../types";
 
 const SOURCE_TYPES = [
   { value: "auto", label: "Auto-detect" },
@@ -21,7 +21,6 @@ export default function AppForm() {
   const [sourceType, setSourceType] = useState("auto");
   const [checkInterval, setCheckInterval] = useState(0);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [nameFilter, setNameFilter] = useState("");
   const [versionSelector, setVersionSelector] = useState("");
   const [versionPattern, setVersionPattern] = useState("");
   const [downloadSelector, setDownloadSelector] = useState("");
@@ -29,6 +28,12 @@ export default function AppForm() {
   const [assetPattern, setAssetPattern] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Suggestion state
+  const [suggestions, setSuggestions] = useState<VersionSuggestion[]>([]);
+  const [detecting, setDetecting] = useState(false);
+
+  const isGitHub = sourceType === "github" || /github\.com/i.test(url);
 
   useEffect(() => {
     api.getSettings().then((s) => setCheckInterval(s.checkIntervalMinutes));
@@ -41,14 +46,12 @@ export default function AppForm() {
         setUrl(app.url);
         setSourceType(app.sourceType);
         setCheckInterval(app.checkIntervalMinutes!);
-        setNameFilter(app.nameFilter ?? "");
         setVersionSelector(app.versionSelector ?? "");
         setVersionPattern(app.versionPattern ?? "");
         setDownloadSelector(app.downloadSelector ?? "");
         setDownloadPattern(app.downloadPattern ?? "");
         setAssetPattern(app.assetPattern ?? "");
         if (
-          app.nameFilter ||
           app.versionSelector ||
           app.versionPattern ||
           app.downloadSelector ||
@@ -61,6 +64,30 @@ export default function AppForm() {
     }
   }, [id, isEdit]);
 
+  async function handleDetect() {
+    if (!url) return;
+    setDetecting(true);
+    setSuggestions([]);
+    setError("");
+    try {
+      const results = await api.suggestVersions(url);
+      setSuggestions(results);
+      if (results.length === 0) {
+        setError("No versions detected on this page.");
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setDetecting(false);
+    }
+  }
+
+  function applySuggestion(s: VersionSuggestion) {
+    setVersionSelector(s.selector);
+    setVersionPattern(s.pattern);
+    setShowAdvanced(true);
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
@@ -71,7 +98,6 @@ export default function AppForm() {
       url,
       sourceType,
       checkIntervalMinutes: checkInterval,
-      ...(nameFilter && { nameFilter }),
       ...(versionSelector && { versionSelector }),
       ...(versionPattern && { versionPattern }),
       ...(downloadSelector && { downloadSelector }),
@@ -160,21 +186,58 @@ export default function AppForm() {
           </label>
         </div>
 
-        <label className="block">
-          <span className="text-sm text-gray-400">
-            Name Filter
-          </span>
-          <input
-            type="text"
-            value={nameFilter}
-            onChange={(e) => setNameFilter(e.target.value)}
-            placeholder='e.g., "Python 3" to match only Python 3.x versions'
-            className="mt-1 block w-full rounded bg-gray-800 border border-gray-700 px-3 py-2 text-white focus:outline-none focus:border-blue-500"
-          />
-          <span className="text-xs text-gray-500 mt-1">
-            Only detect versions near text containing this string
-          </span>
-        </label>
+        {!isGitHub && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleDetect}
+                disabled={detecting || !url}
+                className="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-sm hover:bg-gray-600 disabled:opacity-50"
+              >
+                {detecting ? "Detecting..." : "Detect Versions"}
+              </button>
+              {suggestions.length > 0 && (
+                <span className="text-xs text-gray-500">
+                  {suggestions.length} version(s) found — click "Use" to apply
+                </span>
+              )}
+            </div>
+
+            {suggestions.length > 0 && (
+              <div className="space-y-1">
+                {suggestions.slice(0, 10).map((s, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between rounded bg-gray-800/50 border border-gray-800 px-3 py-2 text-sm"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <span className="text-white font-mono mr-3">
+                        {s.version}
+                      </span>
+                      <span className="text-gray-500 text-xs truncate">
+                        {s.context}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => applySuggestion(s)}
+                      className="text-xs text-blue-400 hover:text-blue-300 ml-3 shrink-0"
+                    >
+                      Use
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {!versionSelector && !versionPattern && (
+              <p className="text-xs text-amber-500/80">
+                Version selector and pattern are required for non-GitHub sources.
+              </p>
+            )}
+          </div>
+        )}
 
         <button
           type="button"
@@ -187,7 +250,7 @@ export default function AppForm() {
         {showAdvanced && (
           <div className="space-y-3 border border-gray-800 rounded-lg p-4">
             <p className="text-xs text-gray-500 mb-2">
-              Override auto-detection with CSS selectors and regex patterns.
+              CSS selectors and regex patterns for version and download detection.
             </p>
 
             <label className="block">
@@ -196,7 +259,7 @@ export default function AppForm() {
                 type="text"
                 value={versionSelector}
                 onChange={(e) => setVersionSelector(e.target.value)}
-                placeholder="e.g., .release-version"
+                placeholder="e.g., h2.release-title"
                 className="mt-1 block w-full rounded bg-gray-800 border border-gray-700 px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500"
               />
             </label>
